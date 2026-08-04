@@ -1,0 +1,193 @@
+/* 标题样式 */
+h1.title {
+  text-align: center;
+  font-size: 4rem;
+  font-family: MapleMono;
+  font-weight: 900;
+  text-shadow:
+    0 0 10px rgba(99, 99, 99, 0.1),
+    /* 极淡的阴影，仅边缘可见 */
+    0 0 20px rgba(112, 253, 255, 0.2);
+
+  background-image: linear-gradient(90deg,
+      #0e8056ff,
+      /* 6 - h6 颜色 */
+      #0e8074ff,
+      /* 5 - h5 颜色 */
+      #0e6074ff,
+      /* 4 - h4 颜色 */
+      #0e4074ff,
+      /* 3 - h3 颜色 */
+      #100e74ff,
+      /* 2 - h2 颜色 */
+      #300e74ff,
+      /* 1 - h1 颜色 */
+      #570e74ff,
+      #570e74ff,
+      #300e74ff,
+      /* 1 - 回到h1 颜色 */
+      #100e74ff,
+      /* 2 - 回到h2 颜色 */
+      #0e4074ff,
+      /* 3 - 回到h3 颜色 */
+      #0e6074ff,
+      /* 4 - 回到h4 颜色 */
+      #0e8074ff,
+      /* 5 - 回到h5 颜色 */
+      #0e8056ff
+      /* 6 - 回到h6 颜色 */
+    );
+
+  background-clip: text;
+  color: transparent;
+}
+
+@media print {
+  h1.title {
+    color: #570e74ff !important;
+    font-size: 4rem !important;
+    text-shadow: 0px 0px 16px rgba(35, 0, 91, 0.5) !important;
+    background-image: none !important;
+    -webkit-background-clip: border-box !important;
+    background-clip: border-box !important;
+  }
+}
+
+/* 标题样式保留，移除计数器相关代码 */
+h1:not(.title) {
+  text-align: center;
+  color: #300e74ff;
+  font-size: 2rem;
+  text-shadow: 0px 2px 8px rgba(24, 0, 62, 0.4);
+}
+
+h2 {
+  text-align: left;
+  color: #100e74ff;
+  font-size: 1.8rem;
+  text-shadow: -2px 2px 8px rgba(20, 0, 107, 0.3);
+}
+
+h3 {
+  text-align: left;
+  color: #0e4074ff;
+  font-size: 1.4rem;
+  text-shadow: -2px 2px 4px rgba(0, 38, 91, 0.3);
+}
+
+h4 {
+  text-align: left;
+  color: #0e6074ff;
+  font-size: 1.3rem;
+}
+
+h5 {
+  text-align: left;
+  color: #0e8074ff;
+  font-size: 1.2rem;
+}
+
+h6 {
+  text-align: left;
+  color: #0e8056ff;
+  font-size: 1.1rem;
+}
+
+@font-face {
+  font-family: "MapleMono";
+  src: url("MapleMono[wght]-VF.ttf") format("truetype");
+}
+
+pre.sourceCode,
+code.sourceCode {
+  font-family: "MapleMono";
+}
+
+/* ========== 极致平滑：消除换行跳动的 TOC ========== */
+
+#TOC a.nav-link {
+  display: block;
+  font-size: 0.7rem !important;
+  line-height: 1.3 !important;
+  box-sizing: border-box !important;
+  padding: 3px 12px 3px 18px !important;
+  /* 统一压缩间距 */
+  text-decoration: none !important;
+  position: relative;
+  border-radius: 6px;
+  margin: 1px 4px !important;
+  /* 只有这里的属性会变 */
+  transition:
+    transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1.1),
+    color 0.3s ease,
+    background-color 0.4s ease,
+    text-shadow 0.3s ease !important;
+  /* 替代 font-weight 的过渡 */
+
+  /* 关键：锁定字体粗细，防止宽度变化 */
+  font-weight: 400 !important;
+  color: inherit;
+}
+
+#TOC a.nav-link.active {
+  font-weight: 400 !important;
+
+  /* 用微小的文字阴影增加视觉厚度，宽度不增加 */
+  text-shadow: 0.3px 0 0 currentColor, -0.1px 0 0 currentColor;
+
+  /* 背景色联动保持不变 */
+  background-color: color-mix(in srgb, currentColor, transparent 90%) !important;
+  transform: translateX(3px) !important;
+  opacity: 1 !important;
+}
+
+/* 激活态左侧指示器保持不变 */
+#TOC a.nav-link.active::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 25%;
+  height: 50%;
+  width: 2.5px;
+  background-color: currentColor;
+  border-radius: 2px;
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* 3. 6级色彩与紧凑缩进（稍微微调 padding 确保稳定） */
+#TOC>ul>li>a.nav-link {
+  color: #300e74ff !important;
+}
+
+#TOC li>ul>li>a.nav-link {
+  color: #100e74ff !important;
+  padding-left: 29px !important;
+}
+
+#TOC li>ul>li>ul>li>a.nav-link {
+  color: #0e4074ff !important;
+  padding-left: 44px !important;
+}
+
+#TOC li>ul>li>ul>li>ul>li>a.nav-link {
+  color: #0e6074ff !important;
+  padding-left: 59px !important;
+}
+
+#TOC li>ul>li>ul>li>ul>li>ul>li>a.nav-link {
+  color: #0e8074ff !important;
+  padding-left: 74px !important;
+}
+
+#TOC li>ul>li>ul>li>ul>li>ul>li>ul>li>a.nav-link {
+  color: #0e8056ff !important;
+  padding-left: 89px !important;
+}
+
+/* 悬停交互也同步取消加粗 */
+#TOC a.nav-link:hover:not(.active) {
+  background-color: color-mix(in srgb, currentColor, transparent 95%);
+  transform: translateX(2px);
+  text-shadow: 0.2px 0 0 currentColor;
+  /* 轻微提亮 */
+}
