@@ -1,0 +1,267 @@
+---
+title: "Basotho Wool 数据检查"
+subtitle: "TidyTuesday · 2026-08-04 (Week 31)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 数据检查
+
+本节对 `basotho_wool.csv` 做 7 步质量检查：结构、缺失与重复、低基数、
+高基数（数值/日期/字符串）与相关性告警。脚本自动检测列类型，不预设列名。
+
+```{r}
+#| label: load-data
+#| echo: true
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(purrr)
+  library(stringr)
+})
+
+data_path <- "../data/basotho_wool.csv"
+out_dir <- "../output"
+dir.create(out_dir, showWarnings = FALSE)
+
+df <- read_csv(data_path, show_col_types = FALSE)
+
+# 列元数据表：一次性构建，后续各步骤复用
+col_info <- tibble(
+  name = names(df),
+  type = map_chr(df, function(x) {
+    if (inherits(x, "Date") || inherits(x, "POSIXct")) {
+      "datetime"
+    } else if (is.numeric(x)) {
+      "numeric"
+    } else {
+      "string"
+    }
+  }),
+  n_unique = map_int(df, ~ length(unique(.x))),
+  n_missing = map_int(df, ~ sum(is.na(.x)))
+) |>
+  mutate(missing_pct = n_missing / nrow(df))
+```
+
+## 1. Skeleton
+
+```{r}
+#| label: step1-skeleton
+knitr::kable(
+  col_info |> mutate(missing_pct = sprintf("%.2f%%", missing_pct * 100)),
+  caption = paste0("Skeleton: ", nrow(df), " 行 x ", ncol(df), " 列"),
+  format = "html"
+)
+```
+
+## 2. Missing and duplicates
+
+```{r}
+#| label: step2-missing-dup
+miss_cols <- col_info |>
+  filter(n_missing > 0) |>
+  arrange(desc(missing_pct))
+
+if (nrow(miss_cols) > 0) {
+  knitr::kable(
+    miss_cols |>
+      select(name, type, n_missing, missing_pct) |>
+      mutate(missing_pct = sprintf("%.2f%%", missing_pct * 100)),
+    caption = "含缺失值的列（按缺失比例降序）",
+    format = "html"
+  )
+} else {
+  cat("**无缺失值。**\n")
+}
+
+n_dup <- sum(duplicated(df))
+cat(ifelse(
+  n_dup > 0,
+  paste0("**完全重复行数：", n_dup, "**"),
+  "**完全重复行数：0**"
+))
+```
+
+## 3. Low-cardinality (unique <= 20)
+
+```{r}
+#| label: step3-low-card
+low_threshold <- 20
+low_cols <- col_info |> filter(n_unique <= low_threshold)
+
+if (nrow(low_cols) > 0) {
+  freq_tables <- map_dfr(low_cols$name, function(col) {
+    df |>
+      count(!!sym(col)) |>
+      mutate(
+        column = col,
+        value = as.character(!!sym(col)),
+        prop = n / nrow(df)
+      ) |>
+      select(column, value, n, prop)
+  }) |>
+    arrange(column, desc(n))
+
+  knitr::kable(
+    freq_tables |>
+      mutate(prop = sprintf("%.2f%%", prop * 100)),
+    caption = paste0("低基数列频率表（unique <= ", low_threshold, "）"),
+    format = "html"
+  )
+} else {
+  cat(paste0("**无低基数列（unique <= ", low_threshold, "）。**"))
+}
+```
+
+## 4. High-cardinality numeric
+
+```{r}
+#| label: step4-numeric
+num_cols <- col_info |> filter(type == "numeric", n_unique > low_threshold)
+
+if (nrow(num_cols) > 0) {
+  num_stats <- map_dfr(num_cols$name, function(col) {
+    v <- df[[col]]
+    q <- quantile(v, c(0.25, 0.5, 0.75), na.rm = TRUE)
+    iqr <- q[3] - q[1]
+    lo <- q[1] - 1.5 * iqr
+    hi <- q[3] + 1.5 * iqr
+    n_neg <- sum(v < 0, na.rm = TRUE)
+    n_zero <- sum(v == 0, na.rm = TRUE)
+    tibble(
+      column = col,
+      min = min(v, na.rm = TRUE),
+      max = max(v, na.rm = TRUE),
+      mean = mean(v, na.rm = TRUE),
+      median = q[2],
+      sd = sd(v, na.rm = TRUE),
+      q1 = q[1],
+      q3 = q[3],
+      n_negative = n_neg,
+      n_zero = n_zero,
+      outlier_pct = sum(v < lo | v > hi, na.rm = TRUE) / sum(!is.na(v))
+    )
+  })
+
+  knitr::kable(
+    num_stats |>
+      mutate(
+        across(c(min, max, mean, median, sd, q1, q3), ~ sprintf("%.2f", .x)),
+        outlier_pct = sprintf("%.2f%%", outlier_pct * 100)
+      ),
+    caption = "高基数数值列统计（outlier: IQR 法）",
+    format = "html"
+  )
+} else {
+  cat("**无高基数数值列。**")
+}
+```
+
+## 5. High-cardinality datetime
+
+```{r}
+#| label: step5-datetime
+dt_cols <- col_info |> filter(type == "datetime", n_unique > low_threshold)
+
+if (nrow(dt_cols) > 0) {
+  dt_stats <- map_dfr(dt_cols$name, function(col) {
+    v <- df[[col]] |> as.Date()
+    tibble(
+      column = col,
+      earliest = min(v, na.rm = TRUE),
+      latest = max(v, na.rm = TRUE),
+      span_days = as.integer(max(v, na.rm = TRUE) - min(v, na.rm = TRUE)),
+      n_missing = sum(is.na(v))
+    )
+  })
+  knitr::kable(dt_stats, caption = "高基数日期列统计", format = "html")
+} else {
+  cat("**无高基数日期列。**")
+}
+```
+
+## 6. High-cardinality string
+
+```{r}
+#| label: step6-string
+str_cols <- col_info |> filter(type == "string", n_unique > low_threshold)
+
+if (nrow(str_cols) > 0) {
+  str_stats <- map_dfr(str_cols$name, function(col) {
+    v <- df[[col]]
+    v_clean <- v[!is.na(v)]
+    mode_val <- names(sort(table(v_clean), decreasing = TRUE))[1]
+    tibble(
+      column = col,
+      min_len = min(str_length(v_clean)),
+      max_len = max(str_length(v_clean)),
+      n_empty = sum(v_clean == ""),
+      n_ws_only = sum(str_trim(v_clean) == "" & v_clean != ""),
+      mode = mode_val,
+      mode_pct = sum(v_clean == mode_val, na.rm = TRUE) / length(v_clean)
+    )
+  })
+
+  knitr::kable(
+    str_stats |> mutate(mode_pct = sprintf("%.2f%%", mode_pct * 100)),
+    caption = "高基数字符串列统计",
+    format = "html"
+  )
+} else {
+  cat("**无高基数字符串列。**")
+}
+```
+
+## 7. Correlation alerts
+
+```{r}
+#| label: step7-corr
+corr_threshold <- 0.99
+num_df <- df |> select(where(is.numeric))
+
+if (ncol(num_df) >= 2) {
+  corr <- cor(num_df, use = "pairwise.complete.obs")
+  idx <- which(abs(corr) > corr_threshold & corr < 1, arr.ind = TRUE)
+  idx <- idx[idx[, 1] < idx[, 2], , drop = FALSE] # 只取上三角
+
+  if (nrow(idx) > 0) {
+    pairs <- tibble(
+      var1 = rownames(corr)[idx[, 1]],
+      var2 = colnames(corr)[idx[, 2]],
+      corr = corr[idx]
+    ) |>
+      arrange(desc(abs(corr)))
+    knitr::kable(
+      pairs |> mutate(corr = sprintf("%.3f", corr)),
+      caption = paste0("高相关列对（|r| > ", corr_threshold, "）"),
+      format = "html"
+    )
+  } else {
+    cat(paste0("**无 |r| > ", corr_threshold, " 的列对。**"))
+  }
+} else {
+  cat("**数值列不足 2 列，跳过相关性检查。**")
+}
+```
