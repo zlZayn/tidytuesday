@@ -1,0 +1,428 @@
+---
+title: "Basotho Wool 探索性可视化"
+subtitle: "TidyTuesday · 2026-08-04 (Week 31)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 探索性可视化
+
+数据为莱索托羊毛**镜像贸易统计**（申报国即进口国），2010-2024 月度。核心信息是"谁在买、买多少、趋势如何、季节性怎样"——用一张交互式表格集中呈现，配以迷你趋势线与国旗标识。
+
+```{r}
+#| label: vis-data
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(reactable)
+  library(reactablefmtr)
+  library(htmltools)
+  library(htmlwidgets)
+  library(glue)
+  library(base64enc)
+  library(ggplot2)
+})
+
+df <- read_csv("../data/basotho_wool.csv", show_col_types = FALSE)
+
+# ---- 国家元数据：国旗(base64) + 名称 + ISO ----
+flag_files <- c(
+  "South Africa" = "flags/za.png",
+  "China" = "flags/cn.png",
+  "India" = "flags/in.png",
+  "Uruguay" = "flags/uy.png"
+)
+flag_uri <- sapply(flag_files, function(p) {
+  paste0("data:image/png;base64,", base64encode(file.path(dirname("."), p)))
+})
+iso <- c(
+  "South Africa" = "ZAF",
+  "China" = "CHN",
+  "India" = "IND",
+  "Uruguay" = "URY"
+)
+
+# ---- 年度聚合 ----
+yr <- df |>
+  group_by(ref_year, reporter_desc) |>
+  summarise(value = sum(primary_value, na.rm = TRUE), .groups = "drop") |>
+  arrange(reporter_desc, ref_year)
+
+# ---- 每国完整指标 ----
+build_stats <- function(grp) {
+  years <- grp$ref_year
+  vals <- grp$value
+  n <- length(years)
+  ly <- years[n]
+  pv <- which(years == ly - 1)
+  fy <- which(years == ly - 5)
+  py <- which.max(vals)
+  tibble(
+    reporter_desc = grp$reporter_desc[1],
+    latest_year = ly,
+    latest = vals[n],
+    total = sum(vals),
+    avg = mean(vals),
+    peak_year = years[py],
+    peak = vals[py],
+    yoy = if (length(pv) && pv < n) (vals[n] - vals[pv]) / vals[pv] else NA,
+    chg5y = if (length(fy) && fy < n) (vals[n] - vals[fy]) / vals[fy] else NA,
+    trend = I(list(vals)), # 年度 sparkline（I() 保留为数组）
+    season = I(list(
+      df |>
+        filter(reporter_desc == grp$reporter_desc[1]) |>
+        group_by(ref_month) |>
+        summarise(s = sum(primary_value, na.rm = TRUE), .groups = "drop") |>
+        pull(s)
+    )) # 月度 sparkline
+  )
+}
+tbl <- yr |>
+  group_by(reporter_desc) |>
+  group_split() |>
+  purrr::map_dfr(build_stats)
+
+# 排序：按最新年进口额降序
+tbl <- tbl |>
+  arrange(desc(latest)) |>
+  mutate(
+    flag = unname(flag_uri[reporter_desc]),
+    iso_code = unname(iso[reporter_desc])
+  )
+```
+
+## 进口国总览
+
+```{r}
+#| label: tbl-country
+#| warning: false
+#| message: false
+base_font <- "Archivo, Segoe UI, PingFang SC, Microsoft YaHei, sans-serif"
+fmtM <- function(v) glue("${format(round(v / 1e6), big.mark = ", ")}M")
+fmtArrow <- function(v) {
+  if (is.na(v)) {
+    return(div("\u2014", style = "color: #999;"))
+  }
+  color <- ifelse(v < 0, "#d32f2f", "#388e3c")
+  tagList(
+    span(
+      ifelse(v < 0, "\u2193", "\u2191"),
+      style = glue("color: {color}; margin-right: 4px; font-weight: 600;")
+    ),
+    span(
+      sprintf("%+.1f%%", v * 100),
+      style = glue("color: {color}; font-weight: 600;")
+    )
+  )
+}
+
+reactable(
+  data = tbl,
+  fullWidth = FALSE,
+  defaultPageSize = 10,
+  defaultColDef = colDef(
+    vAlign = "center",
+    align = "center",
+    style = list(fontFamily = base_font),
+    headerStyle = list(textAlign = "center", fontFamily = base_font)
+  ),
+  theme = reactableTheme(
+    headerStyle = list(
+      backgroundColor = "#f8f9fa",
+      fontWeight = "bold",
+      borderBottom = "2px solid #ddd",
+      padding = "10px 4px"
+    )
+  ),
+  columnGroups = list(
+    colGroup(name = "最新表现", columns = c("latest", "yoy", "chg5y")),
+    colGroup(name = "长期画像", columns = c("total", "avg", "peak")),
+    colGroup(name = "趋势", columns = c("trend", "season"))
+  ),
+  columns = list(
+    flag = colDef(show = FALSE),
+    iso_code = colDef(show = FALSE),
+    latest_year = colDef(show = FALSE),
+    peak_year = colDef(show = FALSE),
+    reporter_desc = colDef(
+      name = "进口国",
+      align = "left",
+      width = 220,
+      cell = function(value) {
+        u <- tbl$flag[tbl$reporter_desc == value]
+        c <- tbl$iso_code[tbl$reporter_desc == value]
+        ly <- tbl$latest_year[tbl$reporter_desc == value]
+        tagList(
+          tags$img(
+            src = u,
+            style = "height: 22px; width: 29px; margin-right: 10px;
+                   vertical-align: middle; border-radius: 2px; box-shadow: 0 1px 2px rgba(0,0,0,.15);"
+          ),
+          div(
+            style = "display: inline-block; vertical-align: middle;",
+            div(
+              value,
+              style = "font-weight: bold; font-size: 11pt; line-height: 1.3;"
+            ),
+            div(
+              glue("({c}) · 数据至 {ly}"),
+              style = "font-size: 9pt; color: #666; margin-top: 2px;"
+            )
+          )
+        )
+      }
+    ),
+    latest = colDef(
+      name = "进口额",
+      width = 110,
+      cell = function(value) {
+        div(style = "font-weight: 600; font-size: 11pt;", fmtM(value))
+      }
+    ),
+    yoy = colDef(name = "同比", width = 100, cell = function(v) fmtArrow(v)),
+    chg5y = colDef(name = "近 5 年", width = 110, cell = function(v) {
+      fmtArrow(v)
+    }),
+    total = colDef(
+      name = "累计总额",
+      width = 120,
+      cell = function(value) div(style = "font-weight: 500;", fmtM(value))
+    ),
+    avg = colDef(
+      name = "年均",
+      width = 100,
+      cell = function(value) div(style = "color: #555;", fmtM(value))
+    ),
+    peak = colDef(
+      name = "峰值年 / 峰值",
+      width = 140,
+      cell = function(value, index) {
+        div(
+          div(
+            glue("{tbl$peak_year[index]}"),
+            style = "font-size: 9pt; color: #888;"
+          ),
+          div(fmtM(value), style = "font-weight: 600; color: #5B8FF9;")
+        )
+      }
+    ),
+    trend = colDef(
+      name = "年度趋势",
+      width = 170,
+      cell = react_sparkline(
+        tbl,
+        line_width = 2,
+        line_color = "#5B8FF9",
+        show_area = TRUE,
+        area_opacity = 0.08
+      )
+    ),
+    season = colDef(
+      name = "季节性",
+      width = 170,
+      cell = react_sparkline(
+        tbl,
+        line_width = 2,
+        line_color = "#F6BD16",
+        show_area = TRUE,
+        area_opacity = 0.08
+      )
+    )
+  )
+) |>
+  htmlwidgets::prependContent(
+    tagList(
+      h2(
+        "Basotho Wool Imports by Country",
+        style = "margin-bottom: 8px; font-family: Archivo, sans-serif;"
+      ),
+      div(
+        "莱索托羊毛进口额（镜像统计）：各进口国最新表现、长期画像与 2010-2024 趋势。
+          南非与中国主导；印度规模小且止于 2023，乌拉圭仅 2023 一年记录。",
+        style = "color: #666; margin-bottom: 12px; font-family: Archivo, PingFang SC, sans-serif;"
+      )
+    )
+  ) |>
+  htmlwidgets::appendContent(
+    div(
+      "Source: UN Comtrade (mirror statistics) via rfordatascience/tidytuesday 2026-08-04 | Generated: ",
+      format(Sys.Date(), "%Y-%m-%d"),
+      style = "margin-top: 10px; padding-top: 8px; border-top: 1px solid #eee; color: #666; font-size: 9pt;"
+    )
+  )
+```
+
+## Volume vs Price
+
+Is the growth driven by **volume** or **price**? A dual-axis view splits South African wool imports into **volume (bars, thousand tonnes)** and **unit price (line, USD/kg)**.
+
+```{r}
+#| label: fig-price-volume
+#| fig-cap: "South African wool imports: volume peaked then fell, unit price kept rising"
+#| fig-width: 9
+#| fig-height: 5.5
+suppressPackageStartupMessages({
+  library(ggtext)
+  library(scales)
+  library(ggimage)
+  library(magick)
+})
+
+sa_pv <- df |>
+  filter(reporter_desc == "South Africa", qty > 0, is.finite(qty)) |>
+  group_by(ref_year) |>
+  summarise(
+    tons = sum(qty, na.rm = TRUE) / 1000,
+    price_kg = sum(primary_value, na.rm = TRUE) / sum(qty, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# ---- 标题/副标题（ggtext HTML，参照 tanya-data-viz） ----
+title_txt <- paste0(
+  "<span style='font-size:20pt;font-weight:900;'>",
+  "South African Wool <span style='color:#0E8056;'>Volume vs Price</span></span>"
+)
+subtitle_txt <- paste0(
+  "<span style='font-size:11pt;color:#555555;'>Imports <b>peaked in 2020</b> and fell after;",
+  " price rose from <b>$",
+  round(min(sa_pv$price_kg), 2),
+  "</b> (2012) to <b>$",
+  round(max(sa_pv$price_kg), 2),
+  "</b> (2024) — <span style='color:#0E8056;'><b>wool got pricier</b></span></span>"
+)
+
+# ---- 双轴缩放 ----
+scale_k <- max(sa_pv$tons) * 1.1 / 8
+
+# ---- 羊头贴图（FIFA 手法：magick 降透明度 + 右上偏中位置） ----
+transparent_img <- function(img) {
+  magick::image_fx(img, expression = "0.45*a", channel = "alpha")
+}
+sheep_img <- data.frame(
+  x = 2015,
+  y = 3800,
+  image = "images/sheep-head.png"
+)
+
+# ---- 关键点标注 ----
+peak <- sa_pv |> filter(tons == max(tons))
+last <- sa_pv |> filter(ref_year == max(ref_year))
+
+ggplot(sa_pv, aes(x = ref_year)) +
+  geom_image(
+    data = sheep_img,
+    aes(x = x, y = y, image = image),
+    size = 1,
+    asp = 2452 / 1632,
+    image_fun = transparent_img
+  ) +
+  geom_col(
+    aes(y = tons),
+    fill = "#100e74",
+    width = 0.7,
+    alpha = 0.75,
+    colour = "black",
+    linewidth = 0.35
+  ) +
+  geom_line(aes(y = price_kg * scale_k), color = "#0e8056", linewidth = 1.2) +
+  geom_point(aes(y = price_kg * scale_k), color = "#0e8056", size = 2.4) +
+  # 2020 峰值标注
+  annotate(
+    "segment",
+    x = peak$ref_year,
+    xend = peak$ref_year,
+    y = peak$tons + 300,
+    yend = peak$tons + 950,
+    colour = "#100e74",
+    linewidth = 0.4
+  ) +
+  annotate(
+    "text",
+    x = peak$ref_year,
+    y = peak$tons + 1200,
+    label = glue("Peak {comma(round(peak$tons))} kt"),
+    size = 3.4,
+    colour = "#100e74",
+    fontface = "bold"
+  ) +
+  # 2024 末值标注
+  annotate(
+    "segment",
+    x = last$ref_year - 0.3,
+    xend = last$ref_year - 0.9,
+    y = last$price_kg * scale_k + 150,
+    yend = last$price_kg * scale_k + 850,
+    colour = "#0e8056",
+    linewidth = 0.4
+  ) +
+  annotate(
+    "text",
+    x = last$ref_year - 1.2,
+    y = last$price_kg * scale_k + 1150,
+    label = glue("${round(last$price_kg, 2)}/kg"),
+    size = 3.4,
+    colour = "#0e8056",
+    fontface = "bold"
+  ) +
+  scale_y_continuous(
+    name = "Imports (thousand tonnes)",
+    expand = c(0, 0),
+    sec.axis = sec_axis(
+      ~ . / scale_k,
+      name = "Price (USD/kg)",
+      breaks = seq(0, 8, 2)
+    ),
+    labels = label_comma()
+  ) +
+  coord_cartesian(ylim = c(0, max(sa_pv$tons) * 1.28), clip = "off") +
+  scale_x_continuous(
+    breaks = seq(2010, 2024, 2),
+    limits = c(2010, 2024.8),
+    expand = c(0, 0)
+  ) +
+  labs(
+    title = title_txt,
+    subtitle = subtitle_txt,
+    x = "Year",
+    caption = "Source: UN Comtrade (mirror stats) · bars = imports, line = price"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_markdown(margin = margin(b = 8)),
+    plot.subtitle = element_markdown(size = 11, margin = margin(b = 32)),
+    axis.title.y.left = element_text(color = "#100e74", face = "bold"),
+    axis.title.y.right = element_text(color = "#0e8056", face = "bold"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "#EEEEEE", linewidth = 0.4),
+    plot.caption = element_text(color = "#999999", size = 9)
+  )
+```
+
+## 解读
+
+- **市场格局**：南非（邻国贸易枢纽）与中国主导；南非 15 年最全（累计 $282M），中国 9 年（累计 $173M）；印度规模极小（累计 $11.9M）且止于 2023，乌拉圭仅 2023 年一笔（$0.2M）。
+- **增长信号**：南非与中国 2024 年均小幅回落（-1.5% / -2.2%），但南非近 5 年 +530%、峰值在 2021 年 $38.9M，长周期大幅扩张；中国峰值在 2019 年 $26.2M，近 5 年 -10%。
+- **季节性**：年度与季节迷你图并置，南非季节性最强（高峰在年末 10-1 月，与南半球剪毛季 6-8 月错峰，符合产业链时滞）。
+- **量价拆分**：南非进口额的增长由**量价共振**到**价升量减**——2020 年量见顶（8.5 千吨）后回落，但单价从 2012 年约 $1.8/kg 涨到 2024 年 $6.6/kg，金额保持高位主要由价格驱动。
