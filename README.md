@@ -2,16 +2,22 @@
 
 个人 TidyTuesday 参与项目：每周拉取官方数据，用 R 做数据检查与可视化，以 Quarto 产出报告并长期积累。本文档是项目入口，说明目录结构与环境要求；每周的流程、模板与约定见 [weeks/README.md](weeks/README.md)。
 
+数据来自官方 [TidyTuesday 仓库](https://github.com/rfordatascience/tidytuesday)（每周二发布），本项目的可视化展示站点见 https://zlzayn.github.io/tidytuesday/。
+
 ## 目录结构
 
 ```txt
 tidytuesday/
 ├── README.md                # 项目入口文档（本文件）
+├── index.html               # GitHub Pages 入口页（自动指向最新周可视化）
 ├── assets/                  # 共享样式资源（跨周复用）
 │   ├── styles.css           # 主题样式：渐变标题 + 平滑 TOC + MapleMono
 │   └── MapleMono[wght]-VF.ttf   # 等宽字体（styles.css 引用）
 ├── code/                    # 可复用代码（不随周变化）
-│   └── fetch_tt.R           # 通用取数脚本，参数化日期
+│   ├── fetch_tt.R           # 通用取数脚本，参数化日期
+│   └── update_site.R        # 生成入口页 index.html（扫描 weeks/ 找最新周）
+├── .github/workflows/       # GitHub Actions（push 到 main 自动部署 Pages）
+│   └── deploy.yml           # 部署工作流
 └── weeks/                   # 每周一个独立目录，互不干扰
     ├── README.md            # 每周流程 / qmd 模板 / 约定（见上）
     └── 2026-08-04/          # 以日期命名，长期积累清晰
