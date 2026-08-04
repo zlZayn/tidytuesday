@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TidyTuesday Visualization Hub</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f5f7; color: #1d1d1f; min-height: 100vh; display: flex; flex-direction: column;
+  }
+  header {
+    background: #fff; border-bottom: 1px solid #e5e5e7; padding: 16px 28px;
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  }
+  header h1 { font-size: 18px; font-weight: 700; }
+  header .tag { font-size: 12px; color: #86868b; }
+  main { flex: 1; display: flex; min-height: 0; }
+  aside {
+    width: 240px; background: #fff; border-right: 1px solid #e5e5e7;
+    padding: 20px 0; overflow-y: auto; flex-shrink: 0;
+  }
+  aside h2 { font-size: 12px; color: #86868b; text-transform: uppercase; letter-spacing: .05em;
+             padding: 0 24px 8px; }
+  aside ul { list-style: none; }
+  aside li a {
+    display: block; padding: 9px 24px; font-size: 13px; color: #1d1d1f;
+    text-decoration: none; border-left: 3px solid transparent; transition: all .15s;
+  }
+  aside li a:hover { background: #f5f5f7; }
+  aside li a.active { background: #f0f0f4; border-left-color: #0e8056; font-weight: 600; }
+  aside li .date { font-size: 11px; color: #86868b; margin-left: 6px; }
+  .content { flex: 1; padding: 20px 28px; min-width: 0; display: flex; flex-direction: column; }
+  .content .meta { margin-bottom: 12px; }
+  .content .meta h3 { font-size: 15px; font-weight: 600; }
+  .content .meta .date { font-size: 12px; color: #86868b; }
+  iframe {
+    flex: 1; width: 100%; border: 1px solid #e5e5e7; border-radius: 8px;
+    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.06); min-height: 600px;
+  }
+  footer { text-align: center; padding: 14px; font-size: 12px; color: #86868b; background: #fff;
+           border-top: 1px solid #e5e5e7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TidyTuesday Visualization Hub</h1>
+  <span class="tag">每周 R 数据可视化 · 自动部署 GitHub Pages</span>
+</header>
+<main>
+  <aside>
+    <h2>Weekly Visualizations</h2>
+    <ul>
+<li><a href="./weeks/2026-08-04/output/02_exploratory_visualization.html" onclick="loadViz(this)">Basotho Wool 探索性可视化</a> <span class="date">2026-08-04</span></li>
+</ul>
+  </aside>
+  <div class="content">
+    <div class="meta">
+      <h3 id="viz-title">
+Basotho Wool 探索性可视化
+</h3>
+      <span class="date" id="viz-date">
+2026-08-04
+</span>
+    </div>
+    <iframe id="viz-frame" src="
+./weeks/2026-08-04/output/02_exploratory_visualization.html
+" title="可视化"></iframe>
+  </div>
+</main>
+<footer>自动生成于 
+2026-08-04
+ · 由 update_site.R 维护</footer>
+<script>
+  function loadViz(link) {
+    document.getElementById("viz-frame").src = link.getAttribute("href");
+    document.querySelectorAll("aside a").forEach(a => a.classList.remove("active"));
+    link.classList.add("active");
+    document.getElementById("viz-title").textContent = link.childNodes[0].textContent.trim();
+    const dateSpan = link.querySelector(".date");
+    document.getElementById("viz-date").textContent = dateSpan ? dateSpan.textContent.trim() : "";
+  }
+  document.addEventListener("DOMContentLoaded", () => {
+    const first = document.querySelector("aside a");
+    if (first) first.classList.add("active");
+  });
+</script>
+</body>
+</html>

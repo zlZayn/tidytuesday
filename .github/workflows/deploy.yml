@@ -1,0 +1,44 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # 手动触发
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # R 环境：跑 update_site.R 需要 base R（无第三方依赖）
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.3'
+
+      # 生成入口页 index.html（扫描 weeks/ 找最新周）
+      - name: Generate index.html
+        run: Rscript code/update_site.R
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: . # 整仓上传（index.html + weeks/ 下的 self-contained HTML）
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # 说明：仓库需在 Settings > Pages 里选择 "GitHub Actions" 作为来源
