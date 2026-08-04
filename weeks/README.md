@@ -91,3 +91,28 @@ execute:
 | 数据读取 | qmd 内用相对路径 `../data/<dataset>.csv`（相对 `weeks/<date>/code/`） |
 | 图表 | 每图配 cell 选项 `#&#124; label: fig-*`、`#&#124; fig-cap:`，可交叉引用 |
 | 语言 | **图内文字一律英文**（R 渲染中文易缺字体）；正文/表格注释可为中文 |
+
+## 自动部署（GitHub Pages）
+
+push 到 `main` 后，Actions 自动部署到 https://zlzayn.github.io/tidytuesday/：
+入口页（index.html）侧边栏列出所有周，iframe 默认展示最新周可视化，点击可切换历史周。
+
+**脚本与模板的配合关系**（`code/update_site.R` 与每周 qmd 模板互相依赖）：
+
+| 环节 | 谁负责 | 说明 |
+| --- | --- | --- |
+| 产出可视化 | 每周 qmd 模板 | 渲染 `02_exploratory_visualization.qmd` 得到同名 HTML |
+| 识别最新周 | `update_site.R` | 扫描 `weeks/<date>/output/` 找这个固定文件名 |
+| 默认展示 | `update_site.R` | 取日期最大的周作为 iframe 默认内容 |
+| 历史列表 | `update_site.R` | 其余周按日期降序进侧边栏 |
+
+**硬编码约定**（改动任一侧都会破坏部署，必须同步改）：
+
+1. 可视化文件固定名：`weeks/<date>/output/02_exploratory_visualization.html`
+   - 脚本只认这个文件名，不猜、不改名
+2. 周目录命名：`weeks/<YYYY-MM-DD>/`
+   - 字符串排序 = 时间排序，最新周 = 目录名最大的
+3. 每周只需两步：渲染出 `02_exploratory_visualization.html` → push
+   - 下次部署自动重扫目录，无需改脚本
+
+**一句话流程**：每周渲染出固定文件名的 HTML → push → Actions 重跑 `update_site.R` → 重扫目录 → 最新周自动成为默认展示。
