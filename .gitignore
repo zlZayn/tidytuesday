@@ -1,3 +1,4 @@
 # 工具目录（不纳入版本控制）
 .codegraph/
 .omo/
+.playwright-mcp/

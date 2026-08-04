@@ -1,55 +1,53 @@
 # tidytuesday
 
-个人 TidyTuesday 参与项目。每周拉取数据、做分析、产出图表。
+个人 TidyTuesday 参与项目：每周拉取官方数据，用 R 做数据检查与可视化，以 Quarto 产出报告并长期积累。本文档是项目入口，说明目录结构与环境要求；每周的流程、模板与约定见 [weeks/README.md](weeks/README.md)。
 
 ## 目录结构
 
-```
+```txt
 tidytuesday/
-├── README.md              # 项目说明
-├── code/                  # 可复用代码（不随周变化）
-│   └── fetch_tt.R         # 通用取数脚本，参数化日期
-└── weeks/                 # 每周一个独立目录，互不干扰
-    └── 2026-08-04/        # 以日期命名，长期积累清晰
-        ├── data/          # 原始数据（CSV）
-        ├── readme.md      # 该周官方说明
-        └── output/        # 该周分析产出（图表/报告）
+├── README.md                # 项目入口文档（本文件）
+├── assets/                  # 共享样式资源（跨周复用）
+│   ├── styles.css           # 主题样式：渐变标题 + 平滑 TOC + MapleMono
+│   └── MapleMono[wght]-VF.ttf   # 等宽字体（styles.css 引用）
+├── code/                    # 可复用代码（不随周变化）
+│   └── fetch_tt.R           # 通用取数脚本，参数化日期
+└── weeks/                   # 每周一个独立目录，互不干扰
+    ├── README.md            # 每周流程 / qmd 模板 / 约定（见上）
+    └── 2026-08-04/          # 以日期命名，长期积累清晰
+        ├── code/            # 该周分析文档（qmd）
+        │   ├── _quarto.yml                      # 固化输出目录（output-dir: ../output）
+        │   ├── 01_data_check.qmd               # 数据检查（7 步质量检查）
+        │   └── 02_exploratory_visualization.qmd # 探索性可视化（图表 + 解读）
+        ├── data/            # 原始数据（CSV）
+        ├── output/          # 渲染产物（单文件 HTML）
+        └── readme.md        # 该周官方说明
 ```
 
 设计原则：
 
 | 原则 | 体现 |
 | --- | --- |
-| 隔离 | 每周数据、说明、产出放在各自 `weeks/<date>/` 下，互不污染 |
-| 可复用 | 取数逻辑收敛在 `code/fetch_tt.R`，每周不重复写 |
-| 长期积累 | 按日期命名，历史周一目了然，可随时回看 |
-| 可移植 | 所有路径相对项目根目录，不写死绝对路径 |
+| 隔离 | 每周数据、代码、产出放在各自 `weeks/<date>/` 下，互不污染 |
+| 可复用 | 取数逻辑收敛在 `code/fetch_tt.R`；qmd 模板在 `weeks/README.md` 可直接套用 |
+| 灵活 | 模板仅供参考，不强制——每周按需调整文件拆分与内容 |
+| 可移植 | 路径相对项目根或当前周目录，不写死绝对路径 |
 
-## 使用方式
-
-以项目根目录 `D:\RDirectory\tidytuesday` 作为工作目录打开（RStudio/VSCode 直接打开该文件夹）。
-
-### 拉取某周数据
+## 快速开始
 
 ```bash
-# 默认取最近一周
+# 拉取最近一周数据
 Rscript code/fetch_tt.R
 
-# 指定日期
-Rscript code/fetch_tt.R 2026-08-04
+# 新建周目录后，按 weeks/README.md 的模板写 qmd 并渲染
 ```
 
-数据落到 `weeks/2026-08-04/data/`，官方说明存到 `weeks/2026-08-04/readme.md`。
-
-### 每周分析流程
-
-1. 运行取数脚本拉数据
-2. 在 `weeks/<date>/` 下新建分析脚本（如 `analysis.R`），读取 `data/<dataset>.csv`
-3. 图表/报告输出到 `weeks/<date>/output/`
-4. （可选）每周主题记录在 `weeks/<date>/readme.md` 或根 README 补充
+每周完整流程、qmd YAML 模板与语言约定见 **[weeks/README.md](weeks/README.md)**。
 
 ## 环境要求
 
 - R >= 4.x
 - tidytuesdayR（dev 版，含最新周映射）：`remotes::install_github("dslc-io/tidytuesdayR")`
-- readr
+- readr、dplyr、tidyr、purrr、stringr、ggplot2、scales
+- Quarto CLI（渲染 qmd）
+- 交互式表格（可视化 qmd 可选）：reactable、reactablefmtr、dataui、htmltools、htmlwidgets、glue、base64enc
