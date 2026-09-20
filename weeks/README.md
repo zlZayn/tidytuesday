@@ -1,10 +1,12 @@
-# weeks · 每周规范
+# weeks/ — 每周流程与约定
 
 本目录存放每周 TidyTuesday 工作区。以下为**每周重复的流程、模板与习惯约定**（参考性质，非强制）。
 
+规则层（进入本目录时自动注入）见 [AGENTS.md](AGENTS.md)；设计与契约见 [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)。
+
 ## 每周流程
 
-以项目根目录 `D:\RDirectory\tidytuesday` 作为工作目录打开（RStudio/VSCode 直接打开该文件夹）。
+以项目根目录作为工作目录打开（RStudio/VSCode 直接打开项目文件夹）。
 
 1. 拉取数据（自动落到 `weeks/<date>/data/`）：
 
@@ -38,7 +40,7 @@
 | --- | --- |
 | 必须两个都渲染 | `01_data_check` 和 `02_exploratory_visualization` 各自生成独立 HTML，一个不跑就少一份 |
 | 输出目录已固化 | `_quarto.yml` 的 `output-dir: ../output` 管住输出位置，任意目录跑都落到 `weeks/<date>/output/` |
-| qmd 内部路径自动解析 | 数据 `../data/`、图片 `images/`、样式 `../../../assets/` 都相对 qmd 文件本身，与运行位置无关 |
+| qmd 内部路径自动解析 | 图片 `images/`、样式 `../../../assets/` 相对 qmd 文件本身；数据路径见「常用约定」的数据读取行。渲染与运行位置无关 |
 | 渲染失败排查 | 报 `there is no package` → 装对应包；报字体路径 → `css: ../../../assets/styles.css` 检查层级；改了代码没变化 → 重跑（quarto 无强缓存） |
 | 增量渲染 | 只改了内容想快速预览：`quarto render 02_exploratory_visualization.qmd` 单跑即可 |
 
@@ -80,6 +82,8 @@ execute:
 ---
 ```
 
+> `code-fold` 只在存在 `echo: true` 的 chunk 时才生效；本项目报告 chunk 一律 `#| echo: false`，页面不展示 R 源码。验收判据：产物中 `<pre` 与 `class="sourceCode` 计数为 0（精确匹配 `class="sourceCode"` 会假阴性：Quarto 写的是带后缀形式，如 `class="sourceCode cell-code"` / `class="sourceCode r code-with-copy"`）。
+
 ## 常用约定
 
 | 项 | 约定 |
@@ -88,9 +92,9 @@ execute:
 | YAML | 各 qmd 尽量同构，只改 `title` 与 `subtitle` |
 | 样式 | 共用根目录 `assets/styles.css`（含 MapleMono 字体），self-contained 自动内嵌 |
 | 输出 | `self-contained: true`，单文件 HTML，便于分享与归档 |
-| 数据读取 | qmd 内用相对路径 `../data/<dataset>.csv`（相对 `weeks/<date>/code/`） |
+| 数据读取 | 手写 qmd 用相对路径 `../data/<dataset>.csv`（相对 `weeks/<date>/code/`）；参数化模板 `01_data_check.qmd` 例外——用 `assets/` 根标记定位项目根后拼 `weeks/<week>/data/` |
 | 图表 | 每图配 cell 选项 `#&#124; label: fig-*`、`#&#124; fig-cap:`，可交叉引用 |
-| 语言 | **图内文字一律英文**（R 渲染中文易缺字体）；正文/表格注释可为中文 |
+| 语言 | **图内文字一律英文**（原因见 [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)）；正文 / 表格注释可为中文 |
 
 ## 自动部署（GitHub Pages）
 
@@ -102,17 +106,18 @@ push 到 `main` 后，Actions 自动部署到 https://zlzayn.github.io/tidytuesd
 | 环节 | 谁负责 | 说明 |
 | --- | --- | --- |
 | 产出可视化 | 每周 qmd 模板 | 渲染 `02_exploratory_visualization.qmd` 得到同名 HTML |
-| 识别最新周 | `update_site.R` | 扫描 `weeks/<date>/output/` 找这个固定文件名 |
+| 收录全部周 | `update_site.R` | 优先 `02_exploratory_visualization.html`，缺失时回退 `01_data_check.html`（条目带「数据检查」标记）；两个都没有的周不进列表 |
+| 排序与默认 | `update_site.R` | 按目录名降序（新 → 旧）进侧边栏，最新周为 iframe 默认内容 |
 | 默认展示 | `update_site.R` | 取日期最大的周作为 iframe 默认内容 |
 | 历史列表 | `update_site.R` | 其余周按日期降序进侧边栏 |
 
 **硬编码约定**（改动任一侧都会破坏部署，必须同步改）：
 
-1. 可视化文件固定名：`weeks/<date>/output/02_exploratory_visualization.html`
-   - 脚本只认这个文件名，不猜、不改名
+1. 产物固定名（优先级从高到低）：`weeks/<date>/output/02_exploratory_visualization.html` → `weeks/<date>/output/01_data_check.html`
+   - 脚本只认这两个文件名，不猜、不改名
 2. 周目录命名：`weeks/<YYYY-MM-DD>/`
    - 字符串排序 = 时间排序，最新周 = 目录名最大的
-3. 每周只需两步：渲染出 `02_exploratory_visualization.html` → push
+3. 每周只需两步：渲染出 `02_exploratory_visualization.html`（该周没有就先渲染 `01_data_check.html`）→ push
    - 下次部署自动重扫目录，无需改脚本
 
-**一句话流程**：每周渲染出固定文件名的 HTML → push → Actions 重跑 `update_site.R` → 重扫目录 → 最新周自动成为默认展示。
+**一句话流程**：每周渲染出固定文件名的 HTML → push → Actions 重跑 `update_site.R` → 重扫目录 → 全部周按新 → 旧进侧边栏，最新周成为默认展示。

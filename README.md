@@ -20,14 +20,12 @@ tidytuesday/
 │   └── deploy.yml           # 部署工作流
 └── weeks/                   # 每周一个独立目录，互不干扰
     ├── README.md            # 每周流程 / qmd 模板 / 约定（见上）
-    └── 2026-08-04/          # 以日期命名，长期积累清晰
-        ├── code/            # 该周分析文档（qmd）
-        │   ├── _quarto.yml                      # 固化输出目录（output-dir: ../output）
-        │   ├── 01_data_check.qmd               # 数据检查（7 步质量检查）
-        │   └── 02_exploratory_visualization.qmd # 探索性可视化（图表 + 解读）
-        ├── data/            # 原始数据（CSV）
-        ├── output/          # 渲染产物（单文件 HTML）
-        └── readme.md        # 该周官方说明
+    └── <YYYY-MM-DD>/        # 以日期命名，长期积累清晰
+        ├── code/            # 本周 qmd 与周内资源（图片、图标）
+        │   ├── _quarto.yml      # 固化输出目录（output-dir: ../output）
+        │   └── *.qmd            # 本周分析文档（数据检查 / 可视化）
+        ├── data/            # 原始数据（CSV，只读）
+        └── output/          # 渲染产物（单文件 HTML + 清洗后 CSV）
 ```
 
 设计原则：
@@ -57,3 +55,8 @@ Rscript code/fetch_tt.R
 - readr、dplyr、tidyr、purrr、stringr、ggplot2、scales
 - Quarto CLI（渲染 qmd）
 - 交互式表格（可视化 qmd 可选）：reactable、reactablefmtr、dataui、htmltools、htmlwidgets、glue、base64enc
+- 可视化增强（`02_exploratory_visualization.qmd` 已用）：ggtext、ggimage、magick
+
+## 维护
+
+维护索引与文档地图见 [AGENTS.md](AGENTS.md)；设计与契约见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
