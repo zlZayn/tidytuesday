@@ -1,0 +1,468 @@
+---
+title: "卡布奇诺指数：一杯咖啡要干多久"
+subtitle: "TidyTuesday · 2026-09-08"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 330px
+      body-width: 880px
+      margin-width: 140px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 一杯卡布奇诺的三层账
+
+> 本周视觉身份：**焦糖场 `#D9A46B`** ＋ 浓缩咖啡 `#3A2418` / 奶油 `#F7EFE4` / 奶泡灰 `#DCD3C6`（减淡色 `#573B27` = 浓缩咖啡 82% 压在焦糖场上的同一色族暗调）；图表家族 = **横向棒棒糖 ＋ 双对数等工时散点**；版式签名 = **窄而高单列版面 ＋ 数值直标在棒末端（mm:ss）** ＋ 主网格细线之外**每图只加一条参考线**（棒棒糖的零基线／散点的等工时斜线族／剖面的全样本中位数）。
+
+一杯卡布奇诺要花掉多少分钟工资？这份报告把同一个问题拆成三层：**国家排位**、**贵在哪一侧**、**国家级均值盖住了什么**。三层共用同一份聚合（87 国 × 国家均值），所以图与图之间可以直接对照。
+
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(ggplot2)
+  library(scales)
+  library(ggrepel)
+  library(forcats)
+  library(knitr)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi)
+
+TT_MM <- function(pt) pt / 2.845   # geom_text 的 size 用 mm，TT_TYPE 用 pt：只换算，不新增字号
+TY <- TT_TYPE
+
+# ---- 本周色彩（只在本周生效；共享 theme 不含任何色值）----
+PAL <- list(
+  bg    = "#D9A46B",  # 焦糖场：底色
+  ink   = "#3A2418",  # 浓缩咖啡：主墨
+  cream = "#F7EFE4",  # 奶油：棒身 / 区间
+  foam  = "#DCD3C6",  # 奶泡灰：极轻的次级元素
+  tint  = "#573B27"   # = ink 82% 压在 bg 上（同一色族的减淡，对底色 4.6:1）
+)
+
+# 分钟 -> mm:ss：向下截到整秒 ceil(x*60)-1，并先按 5 位小数对齐（官方列就是这样存的）
+mmss <- function(x) {
+  k <- ceiling(round(x, 5) * 60) - 1
+  sprintf("%d:%02d", k %/% 60, k %% 60)
+}
+```
+
+```{r}
+#| label: prep
+#| echo: false
+cafe <- read_csv("../data/cafe.csv", show_col_types = FALSE)
+idxf <- read_csv("../data/cappuccino_index.csv", show_col_types = FALSE)
+
+n_rows <- nrow(cafe)
+n_ctry <- nrow(idxf)
+
+# ---- 本报告唯一的聚合：国家均值。图 1 / 图 2 / 图 3 全部由它派生 ----
+cy <- cafe |>
+  summarise(wage  = mean(hourly_wage_gbp),
+            price = mean(price_gbp),
+            n     = n(), .by = country) |>
+  mutate(index = 60 * price / wage) |>
+  arrange(index) |>
+  mutate(rk = row_number(),
+         hl = rk <= 5 | rk > n() - 5)   # 首尾各 5 国，三张图同一批
+```
+
+```{r}
+#| label: reconciliation-gate
+#| echo: false
+#| include: false
+#| message: true      # 结果只进渲染日志，不进 HTML
+# 硬闸（只进渲染日志，不进 HTML）：口径不对就直接中断，绝不出图。
+# 1) index 是「国家均值之比」，不是中位数之比
+jm <- cy |>
+  inner_join(idxf |> select(country, index_file = index, mmss_file = index_as_time),
+             by = "country")
+dev_mean <- max(abs(jm$index - jm$index_file))
+cor_mean <- cor(jm$index, jm$index_file)
+
+med_alt <- cafe |>
+  summarise(w = median(hourly_wage_gbp), p = median(price_gbp), .by = country) |>
+  mutate(index_med = 60 * p / w) |>
+  inner_join(idxf |> select(country, index_file = index), by = "country") |>
+  mutate(d = index_med - index_file)
+dev_med <- max(abs(med_alt$d))
+
+# 2) mm:ss 复算必须逐国等于官方 index_as_time
+mmss_bad <- sum(mmss(jm$index) != jm$mmss_file)
+
+# 3) 本币列与 *_gbp 列：同币种内比值应恒定（残差只来自本币四舍五入）
+fx_max_cv <- cafe |>
+  filter(price > 0, price_gbp > 0) |>
+  mutate(r = price / price_gbp) |>
+  summarise(n = n(), cv = sd(r) / mean(r), .by = original_currency) |>
+  filter(n >= 10) |> pull(cv) |> max()
+
+rate_max_gap <- cafe |>
+  filter(price > 0, hourly_wage > 0) |>
+  mutate(g = abs((price / price_gbp) / (hourly_wage / hourly_wage_gbp) - 1)) |>
+  summarise(g = max(g), n = n(), .by = original_currency) |>
+  filter(n >= 2) |> pull(g) |> max()
+
+# 4) 三个区位标记不互斥
+flag_overlap <- sum(rowSums(cafe |> select(urban, suburban, rural)) > 1)
+flag_none    <- sum(rowSums(cafe |> select(urban, suburban, rural)) == 0)
+
+# 5) 低工资行（不剔除，正文照实报告）
+w_min <- min(cafe$hourly_wage_gbp)
+w_min_lab <- cafe |> slice_min(hourly_wage_gbp, n = 1) |>
+  transmute(s = sprintf("%s, %s (%s)", city, country, original_currency)) |> pull(s)
+n_sub1 <- sum(cafe$hourly_wage_gbp < 1)
+n_sub2 <- sum(cafe$hourly_wage_gbp < 2)
+
+writeLines(sprintf("[gate] index dev %.2e | cor %.10f | median-alt dev %.1f | mmss bad %d | fx cv %.4f | rate gap %.4f | flag overlap %d",
+                   dev_mean, cor_mean, dev_med, mmss_bad, fx_max_cv, rate_max_gap, flag_overlap),
+           con = stderr())
+
+stopifnot(dev_mean < 1e-9, abs(cor_mean - 1) < 1e-12, mmss_bad == 0,
+          fx_max_cv < 0.01, rate_max_gap < 0.01, flag_none == 0)
+```
+
+## 数据口径
+
+`cafe.csv` 是 `r n_rows` 家门店的横截面：每行给出一杯卡布奇诺的价格与当地小时工资，`cappuccino_index.csv` 把它按国聚合成 87 行。**指数 = 60 × 国家平均价格 ÷ 国家平均小时工资**，单位是「买一杯咖啡要干多少分钟」。三张图里的每一个国家级数值都来自这一份聚合，正文引用的数字与图上读数是同一份。
+
+| 字段 | 口径 |
+| --- | --- |
+| `price` / `hourly_wage` | **本币**原值（`original_currency`，共 `r n_distinct(cafe$original_currency)` 种） |
+| `price_gbp` / `hourly_wage_gbp` | 同一批数字按单套快照汇率折成英镑；**一切跨国比较只用这两列**，`price` / `hourly_wage` 只用来核对本币量级 |
+| `index` | 分钟数；`index_as_time` 是它的 `mm:ss` 写法。**分钟数超过 59 时不是时刻而是累计分钟**——`r idxf$index_as_time[which.max(idxf$minutes)]` 读作 4 小时 37 分（`r sum(idxf$minutes >= 60)` 国如此）。本报告所有 `mm:ss` 一律向下截到整秒 |
+| `urban` / `suburban` / `rural` | 三个**互相独立**的标记，不是三分类：`r flag_overlap` 行同时命中多个。因此本报告不用它们切分国别 |
+| `n`（index 表） | 该国入样的门店数，逐国等于 `cafe.csv` 的国家行数，合计 `r sum(idxf$n)` 家 |
+
+`cafe.csv` 覆盖 `r n_distinct(cafe$city, na.rm = TRUE)` 个城市（`city` 有 `r sum(is.na(cafe$city))` 行缺失）。汇率只有一套快照、数据里没有日期列，所以本报告不涉及任何时间趋势。
+
+## 图 1 · 87 国的排位：从 10 分钟到 4 小时 37 分
+
+```{r}
+#| label: fig1-ladder
+#| echo: false
+#| fig-cap: "Country ladder of the cappuccino index: the rod end gives the country mean as minutes:seconds of work; top and bottom five countries are banded and their names carry n."
+#| fig-width: 7.2
+#| fig-height: 18.0
+i_min   <- min(cy$index)
+i_max   <- max(cy$index)
+i_ratio <- i_max / i_min
+i_med   <- median(cy$index)
+x_lim   <- max(cy$index) + 70      # 给棒末 mm:ss 直标留出画布内空间
+
+cy <- cy |>
+  mutate(y     = fct_inorder(country),
+         lab   = if_else(hl, sprintf("%s  n=%d", mmss(index), n), mmss(index)),
+         heavy = hl)
+
+p1 <- ggplot(cy, aes(x = index, y = y)) +
+  # 高亮不用字重（避免跨图字号/字重漂移）：用低透明度色带把首尾各 5 国托起来
+  geom_rect(data = cy |> filter(heavy),
+            aes(xmin = -Inf, xmax = Inf,
+                ymin = as.numeric(y) - 0.45, ymax = as.numeric(y) + 0.45),
+            fill = PAL$ink, alpha = 0.09, inherit.aes = FALSE) +
+  geom_vline(xintercept = 0, colour = PAL$ink, linewidth = 0.7) +
+  geom_segment(aes(x = 0, xend = index, yend = y),
+               colour = PAL$cream, linewidth = 0.58, lineend = "round") +
+  geom_point(data = cy |> filter(!heavy), colour = PAL$cream, size = 1.75) +
+  geom_point(data = cy |> filter(heavy),  colour = PAL$ink,   size = 3.0) +
+  geom_text(data = cy |> filter(!heavy), aes(x = index + 7, label = lab),
+            hjust = 0, family = TT_MONO, size = TT_MM(TY[["annot"]]), colour = PAL$tint) +
+  geom_text(data = cy |> filter(heavy), aes(x = index + 7, label = lab),
+            hjust = 0, family = TT_MONO, size = TT_MM(TY[["annot"]]), colour = PAL$ink) +
+  scale_x_continuous(limits = c(0, x_lim), breaks = seq(0, 300, 60),
+                     labels = label_number(big.mark = ","), expand = c(0, 0)) +
+  scale_y_discrete(expand = expansion(add = 0.62)) +
+  labs(
+    title    = sprintf("One cappuccino: %.0f minutes in %s, %.1f hours in %s",
+                       i_min, cy$country[1], i_max / 60, cy$country[nrow(cy)]),
+    subtitle = tt_strip(sprintf("%d COUNTRIES", n_ctry),
+                        sprintf("%d CAFES", n_rows), "MEAN OF MEANS"),
+    x = "Minutes of work for one cappuccino (country mean)",
+    y = NULL,
+    caption  = tt_source("cafe.csv + cappuccino_index.csv", n_ctry,
+                         paste(tt_flow(n_rows, n_ctry,
+                                       "country means, the index's own aggregation"),
+                               "rod-end labels are total minutes:seconds, so 277:02 = 4 h 37 min; 25 of 87 countries rest on a single cafe",
+                               sep = " · "),
+                         width = 112)
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$tint, grid = PAL$foam) +
+  theme(
+    # 横向布局：分类轴上的主网格线与棒身完全重复（会盖掉棒身），只留数值轴的主网格
+    panel.grid.major.y = element_blank(),
+    plot.title    = element_text(size = TY[["title"]], face = "bold", colour = PAL$ink,
+                                 hjust = 0, margin = margin(b = 8)),
+    plot.subtitle = element_text(family = TT_MONO, colour = PAL$tint, size = TY[["subtitle"]],
+                                 hjust = 0, margin = margin(b = 14)),
+    axis.text.y   = element_text(family = TT_MONO, size = TY[["axis_text"]], colour = PAL$tint,
+                                 hjust = 1, margin = margin(r = 6)),
+    axis.text.x   = element_text(family = TT_MONO, size = TY[["axis_text"]], colour = PAL$tint),
+    axis.title.x  = element_text(family = TT_MONO, colour = PAL$tint, size = TY[["axis_title"]],
+                                 hjust = 0, margin = margin(t = 8)),
+    plot.caption  = element_text(family = TT_MONO, colour = PAL$tint, size = TY[["caption"]],
+                                 hjust = 0, lineheight = 1.45, margin = margin(t = 14)),
+    plot.margin   = margin(16, 20, 12, 14)
+  )
+p1
+```
+
+`r cy$country[nrow(cy)]` 高居榜首（`r mmss(i_max)`），`r cy$country[1]` 最低（`r mmss(i_min)`），首尾相差 `r sprintf("%.1f", i_ratio)` 倍；87 国的中位数是 `r mmss(i_med)`。分布并不均匀：`r sum(cy$index < 15)` 国在 15 分钟以内，`r sum(cy$index > 60)` 国超过 1 小时，其中 `r sum(cy$index > 120)` 国超过 2 小时。
+
+高亮的 `r sum(cy$hl)` 国里，两端都要留个心眼：`r cy$country[nrow(cy)]` 的 `n` 只有 `r cy$n[nrow(cy)]` 家门店，而全表有 `r sum(cy$n == 1)` 个国家的指数只建立在 **1 家** 门店上（`r sum(cy$n <= 3)` 国不超过 3 家）。棒末的 `n=` 只出现在 `r sum(cy$hl)` 个高亮国，就是因为其余国家里 `n` 小的太多，逐个标出来会把版面压垮——这一层不确定性放到图 3 处理。
+
+## 图 2 · 等工时斜线：贵在哪一侧
+
+同样 87 个国家，把坐标换成「工资」与「价格」两个可观测量的对数，等工时斜线 `y = x · t / 60` 就正好是 `index = t` 的等值线——**散点落在哪条线上，就等于图 1 里的读数**。这是本报告用国家均值而不是中位数的原因：只有均值能让斜线与 `index` 严格重合。
+
+```{r}
+#| label: fig2-isochrone
+#| echo: false
+#| fig-cap: "Log-log country means with iso-work-time lines: the vertical gap between a country and the 60-minute line is exactly its index in Figure 1."
+#| fig-width: 7.4
+#| fig-height: 7.9
+iso <- tibble(t = c(15, 30, 60, 120), a = c(0.30, 0.48, 0.72, 1.00),
+              lab = sprintf("%d min", t))
+xr <- range(cy$wage); yr <- range(cy$price)
+XL <- log10(xr); YL <- log10(yr)   # 大写：避免与下面 mutate 出来的列同名
+
+# 排版硬规则：等工时斜线的直标全部锚在面板顶缘（顶缘越界的贴右缘，仍在同一条线上），
+# 国家名标签由 ggrepel 限制在 y <= 4.9 以下 —— 两族文字在垂直方向被彻底分开。
+TOP_LY   <- YL[1] + 0.93 * (YL[2] - YL[1])
+REPEL_YL <- log10(c(1.02, 4.9))
+
+anchor <- iso |>
+  mutate(x_a = TOP_LY - log10(t / 60),
+         x_a = pmin(x_a, XL[2] * 0.995),
+         y_a = x_a + log10(t / 60),
+         hjust = if_else(x_a >= XL[2] * 0.97, 1.06, 0.06),
+         vjust = 1.32)
+
+# 把全部 87 个点都交给 ggrepel（未高亮的 label = NA 会被当作要避让的点），
+# 否则它只躲得开那 10 个高亮国，标签照样会压在别的国家点上。
+hlab <- cy |> mutate(tag = if_else(hl, sprintf("%s\n%s", country, mmss(index)), NA_character_))
+
+p2 <- ggplot(cy, aes(x = wage, y = price)) +
+  geom_abline(slope = 1, intercept = log10(iso$t[1] / 60), colour = PAL$ink,
+              alpha = iso$a[1], linewidth = 0.55) +
+  geom_abline(slope = 1, intercept = log10(iso$t[2] / 60), colour = PAL$ink,
+              alpha = iso$a[2], linewidth = 0.55) +
+  geom_abline(slope = 1, intercept = log10(iso$t[3] / 60), colour = PAL$ink,
+              alpha = iso$a[3], linewidth = 0.55) +
+  geom_abline(slope = 1, intercept = log10(iso$t[4] / 60), colour = PAL$ink,
+              alpha = iso$a[4], linewidth = 0.62) +
+  geom_point(shape = 21, fill = PAL$cream, colour = PAL$ink, stroke = 0.4, size = 2.1) +
+  geom_point(data = cy |> filter(hl), shape = 21, fill = PAL$ink, colour = PAL$cream,
+             stroke = 0.9, size = 3.4) +
+  geom_label(data = anchor, aes(x = 10^x_a, y = 10^y_a, label = lab,
+                                hjust = hjust, vjust = vjust),
+             family = TT_MONO, size = TT_MM(TY[["annot"]]), colour = PAL$ink, fill = PAL$bg,
+             label.size = NA, label.padding = unit(0.11, "lines"), inherit.aes = FALSE) +
+  geom_text_repel(data = hlab, aes(label = tag), family = TT_MONO,
+                  size = TT_MM(TY[["annot"]]), colour = PAL$ink, lineheight = 0.95, seed = 908,
+                  box.padding = 0.55, point.padding = 1.00, force = 4, max.iter = 20000,
+                  min.segment.length = 0,
+                  segment.colour = PAL$ink, segment.size = 0.28, segment.alpha = 0.75,
+                  max.overlaps = Inf, ylim = REPEL_YL,
+                  bg.color = PAL$bg, bg.r = 0.13) +   # 同底色晕圈：等工时斜线不穿字
+  scale_x_log10(breaks = c(0.5, 1, 2, 5, 10, 20),
+                labels = label_number(accuracy = 0.1)) +
+  scale_y_log10(breaks = c(1, 1.5, 2, 3, 4, 5, 6),
+                labels = label_number(accuracy = 0.1)) +
+  labs(
+    title    = "The expensive side is low wage, not high price",
+    subtitle = tt_strip("COUNTRY MEANS", "15/30/60/120 MIN LINES", sprintf("N = %d", n_ctry)),
+    x = "Mean hourly wage (GBP)",
+    y = "Mean cappuccino price (GBP)",
+    caption  = tt_source("cafe.csv + cappuccino_index.csv", n_ctry,
+                         paste(tt_flow(n_rows, n_ctry,
+                                       "country means; 2,594 cafes collapse to 87 points"),
+                               "lines are y = x * t / 60, i.e. index = t; darker = more work; top/bottom five countries labelled",
+                               sep = " · "),
+                         width = 112)
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$tint, grid = PAL$foam) +
+  theme(
+    plot.title    = element_text(size = TY[["title"]], face = "bold", colour = PAL$ink,
+                                 hjust = 0, margin = margin(b = 8)),
+    plot.subtitle = element_text(family = TT_MONO, colour = PAL$tint, size = TY[["subtitle"]],
+                                 hjust = 0, margin = margin(b = 14)),
+    axis.text     = element_text(family = TT_MONO, size = TY[["axis_text"]], colour = PAL$tint),
+    axis.title.x  = element_text(family = TT_MONO, colour = PAL$tint,
+                                 size = TY[["axis_title"]], hjust = 0),
+    axis.title.y  = element_text(family = TT_MONO, colour = PAL$tint,
+                                 size = TY[["axis_title"]], hjust = 1),
+    plot.caption  = element_text(family = TT_MONO, colour = PAL$tint, size = TY[["caption"]],
+                                 hjust = 0, lineheight = 1.45, margin = margin(t = 14)),
+    plot.margin   = margin(16, 22, 12, 14)
+  )
+p2
+```
+
+对数轴上价格这一维被压得很窄（`r sprintf("%.2f", yr[1])`–`r sprintf("%.2f", yr[2])` 英镑，只有 `r sprintf("%.1f", yr[2] / yr[1])` 倍），而工资跨了 `r sprintf("%.1f", xr[2] / xr[1])` 倍——**贵不贵几乎全靠工资决定**：`log` 工资与 `log` 价格的相关系数只有 `r sprintf("%.2f", cor(log(cy$wage), log(cy$price)))`。所以斜线在图上近乎水平地扫过去，落点高低主要来自横轴位置，而不是价格本身。
+
+## 图 3 · 国家级均值盖住了什么
+
+前两张图每个国家只有一个点，这个点可能谁都不代表。把门店还原成行：分钟数 `= 60 × price_gbp / hourly_wage_gbp`，只看门店数 `n ≥ 30` 的 `r nrow(cy |> filter(n >= 30))` 个国家。
+
+```{r}
+#| label: fig3-spread
+#| echo: false
+#| fig-cap: "Inside the thirteen best-sampled countries: the country mean tracks the median cafe closely, but individual cafes span about a two-fold range, and within-country spread rivals the spread between countries."
+#| fig-width: 7.2
+#| fig-height: 6.2
+big  <- cy |> filter(n >= 30) |> arrange(desc(index))
+rows <- cafe |>
+  filter(country %in% big$country) |>
+  mutate(minutes = 60 * price_gbp / hourly_wage_gbp)
+flow_big   <- tt_flow(n_rows, nrow(rows),
+                      sprintf("only the %d countries with n >= 30", nrow(big)))
+flow_strip <- tt_flow(n_rows, nrow(rows))   # 条幅要短，剔除原因进正文与图注
+med_floor <- median(rows$minutes)
+
+spread <- rows |>
+  summarise(q05 = quantile(minutes, 0.05), q25 = quantile(minutes, 0.25),
+            med = median(minutes), q75 = quantile(minutes, 0.75),
+            q95 = quantile(minutes, 0.95), n = n(), .by = country) |>
+  inner_join(big |> select(country, index, n_ctry = n), by = "country") |>
+  arrange(index) |>                            # 升序：与图 1 同一名次方向，最高者落在顶部
+  mutate(y = fct_inorder(country),
+         heavy = country %in% big$country[big$hl])
+
+sd_within  <- rows |> summarise(s = sd(log(minutes)), .by = country) |> pull(s) |> mean()
+sd_between <- sd(log(big$index))
+
+# 图 3 要讲的两件事：均值离中位数门店有多远，以及国内离散有多大
+gap     <- spread |> mutate(d = abs(log(index) - log(med))) |> arrange(desc(d)) |> slice(1)
+gap_pct <- abs(gap$index / gap$med - 1)
+rr        <- spread |> mutate(ratio = q95 / q05) |> arrange(desc(ratio))
+ratio_med <- median(rr$ratio)
+ratio_top <- rr |> slice(1)
+
+p3 <- ggplot(spread, aes(y = y)) +
+  geom_rect(data = spread |> filter(heavy),
+            aes(xmin = -Inf, xmax = Inf,
+                ymin = as.numeric(y) - 0.44, ymax = as.numeric(y) + 0.44),
+            fill = PAL$ink, alpha = 0.09, inherit.aes = FALSE) +
+  geom_vline(xintercept = med_floor, colour = PAL$ink, linewidth = 0.45,
+             linetype = "22", alpha = 0.55) +
+  geom_segment(aes(x = q05, xend = q95, yend = y), colour = PAL$cream, linewidth = 0.7) +
+  geom_segment(aes(x = q25, xend = q75, yend = y), colour = PAL$cream, linewidth = 3.4,
+               lineend = "butt") +
+  geom_point(aes(x = med), shape = 21, fill = PAL$bg, colour = PAL$ink,
+             stroke = 0.75, size = 2.0) +
+  geom_point(aes(x = index), shape = 21, fill = PAL$ink, colour = PAL$cream,
+             stroke = 0.7, size = 2.7) +
+  annotate("text", x = med_floor, y = nrow(spread) + 0.74,
+           label = sprintf("median cafe %s", mmss(med_floor)),
+           family = TT_MONO, size = TT_MM(TY[["annot"]]), colour = PAL$ink,
+           hjust = 1.1, vjust = 0.5) +
+  scale_x_log10(breaks = c(5, 10, 15, 20, 30, 50, 100),
+                labels = label_number(accuracy = 1)) +
+  scale_y_discrete(expand = expansion(add = 0.85)) +
+  labs(
+    title    = "Within-country spread rivals the gap between countries",
+    subtitle = tt_strip(flow_strip, "IQR + P5-P95"),
+    x = "Minutes of work for one cappuccino (individual cafes, log scale)",
+    y = NULL,
+    caption  = tt_source("cafe.csv", nrow(rows),
+                         paste(tt_flow(n_rows, nrow(rows),
+                                       sprintf("only the %d countries with n >= 30", nrow(big))),
+                               "dot = country mean (the value used in Figures 1-2); open dot = median cafe",
+                               sprintf("mean within-country sd(log) = %.2f vs sd(log) between these countries = %.2f",
+                                       sd_within, sd_between),
+                               sep = " · "),
+                         width = 112)
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$tint, grid = PAL$foam) +
+  theme(
+    # 同上：行规则线与 IQR 条、P5-P95 线重叠，去掉分类轴的网格
+    panel.grid.major.y = element_blank(),
+    plot.title    = element_text(size = TY[["title"]], face = "bold", colour = PAL$ink,
+                                 hjust = 0, margin = margin(b = 8)),
+    plot.subtitle = element_text(family = TT_MONO, colour = PAL$tint, size = TY[["subtitle"]],
+                                 hjust = 0, margin = margin(b = 14)),
+    axis.text.y   = element_text(family = TT_MONO, size = TY[["axis_text"]], colour = PAL$tint,
+                                 hjust = 1, margin = margin(r = 6)),
+    axis.text.x   = element_text(family = TT_MONO, size = TY[["axis_text"]], colour = PAL$tint),
+    axis.title.x  = element_text(family = TT_MONO, colour = PAL$tint,
+                                 size = TY[["axis_title"]], hjust = 0),
+    plot.caption  = element_text(family = TT_MONO, colour = PAL$tint, size = TY[["caption"]],
+                                 hjust = 0, lineheight = 1.45, margin = margin(t = 14)),
+    plot.margin   = margin(16, 22, 12, 14)
+  )
+p3
+```
+
+`r flow_big`。这 `r nrow(rows)` 行门店的中位数是 `r mmss(med_floor)`。先看均值能不能代表「典型门店」：在这 `r nrow(spread)` 个样本充足的国家里，国家级均值与中位数门店差得最远的是 `r gap$country`（均值 `r mmss(gap$index)` vs 中位数门店 `r mmss(gap$med)`，`r sprintf("%.1f%%", 100 * gap_pct)`，而这 `r nrow(spread)` 国的中位差距只有 `r sprintf("%.1f%%", 100 * median(abs(spread$index / spread$med - 1)))`），所以用均值概括「典型门店」站得住。被抹掉的是**离散**：这些国家最便宜 5% 与最贵 5% 门店的比值中位数是 `r sprintf("%.1f", ratio_med)` 倍（最宽的是 `r ratio_top$country`，`r sprintf("%.1f", ratio_top$ratio)` 倍）。这 `r nrow(spread)` 国国内的 `sd(log)` 平均 `r sprintf("%.2f", sd_within)`，它们之间的 `sd(log)` 是 `r sprintf("%.2f", sd_between)`：**同一国内部的离散，已经接近国家之间的离散**。所以图 1 的名次只应读作「国家级平均条件」，不代表你走进任意一家门店会看到的时间。
+
+```{r}
+#| label: type-audit
+#| echo: false
+#| include: false
+#| message: true      # 结果只进渲染日志，不进 HTML
+# 排版自检（只进渲染日志，不进 HTML）：字号是否都在共享阶梯内、家族是否 <= 2。
+audit_tbl <- bind_rows(
+  tt_audit(p1) |> mutate(figure = "fig1"),
+  tt_audit(p2) |> mutate(figure = "fig2"),
+  tt_audit(p3) |> mutate(figure = "fig3")
+)
+size_kinds <- length(unique(stats::na.omit(audit_tbl$size)))
+fam_kinds  <- length(unique(c(TT_FAMILY[["text"]],
+                              as.character(stats::na.omit(audit_tbl$family)))))
+off_ladder <- sum(!audit_tbl$in_ladder)
+writeLines(sprintf("[type] size kinds %d/%d | families %d/%d | off-ladder %d",
+                   size_kinds, TT_TYPE_MAX, fam_kinds, TT_FAMILY_MAX, off_ladder),
+           con = stderr())
+stopifnot(size_kinds <= TT_TYPE_MAX, fam_kinds <= TT_FAMILY_MAX, off_ladder == 0)
+```
+
+## 数据异常
+
+`hourly_wage_gbp` 最低只有 `r sprintf("%.2f", w_min)` 英镑/小时（`r w_min_lab`），低于 1 英镑的 `r n_sub1` 家、低于 2 英镑的 `r n_sub2` 家。这不是录入错误：这些行的本币工资（如 22 INR/h、135 PKR/h、9 000 IDR/h）与各自币种的量级一致，是低工资经济体的真实值。**不剔除**——它们正是高指数国家（`r cy$country[nrow(cy)]` `r mmss(i_max)`、`r cy$country[nrow(cy) - 1]` `r mmss(cy$index[nrow(cy) - 1])`）的来源；代价是这些国家的指数对单店极度敏感。
+
+另一处口径陷阱在棒末标签：`index_as_time` 在分钟数超过 59 时是**累计分钟**，`r sprintf("%d", max(idxf$minutes))` 分钟会写成 `r idxf$index_as_time[which.max(idxf$minutes)]`。报告沿用这个格式，并在图注里写明换算。
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/cafe.csv`（`r n_rows` × `r ncol(cafe)`）、`data/cappuccino_index.csv`（`r n_ctry` × `r ncol(idxf)`），只读 |
+| 本报告聚合 | 按 `country` 求**均值**：`wage = mean(hourly_wage_gbp)`、`price = mean(price_gbp)`、`index = 60 × price / wage`。三张图的国家级数值全部来自这一份 `r n_ctry` 行表 |
+| 图 3 口径链 | `r flow_big`；被排除的 `r n_rows - nrow(rows)` 行分布在其余 `r n_ctry - nrow(big)` 个国家，全部因为 `n < 30`，不是数据问题 |
+| 币种 | `price` / `hourly_wage` 是本币（`original_currency` 共 `r n_distinct(cafe$original_currency)` 种）；一切跨国数字用 `*_gbp`。汇率是单套快照，无日期列 |
+| 未使用的字段 | `city`（`r sum(is.na(cafe$city))` 行缺失，且图 1、2 是国家级）；`urban` / `suburban` / `rural`（三个标记不互斥、`r flag_overlap` 行同时命中多个，且 `rural` 只有 `r sum(cafe$rural)` 家门店摊在 16 个国家里） |
+| 图内文字 | 一律英文 |

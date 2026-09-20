@@ -1,0 +1,628 @@
+---
+title: "IELTS 考生构成与成绩 探索性可视化"
+subtitle: "TidyTuesday · 2026-08-18 (Week 33)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 两科的差距全在听力与阅读，说写几乎重合
+
+本周五个 CSV 都是**已聚合的比例与均分**：没有一行是一个人，也没有任何一个候选人数。所以全篇只回答三件事——分数在**档位构成**上长什么样、Academic 与 General Training 差在哪、**报考理由**比考试类型能不能分得更开。
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(ggplot2)
+  library(patchwork)
+  library(systemfonts)
+  library(scales)
+  library(knitr)
+})
+
+# 项目根：从当前目录与 qmd 所在目录逐级上溯，找到含 assets/ 的目录即项目根
+find_root <- function() {
+  starts <- unique(c(getwd(), tryCatch(dirname(knitr::current_input(dir = TRUE)),
+                                       error = function(e) getwd())))
+  for (s in starts) {
+    cur <- normalizePath(s, mustWork = FALSE)
+    repeat {
+      if (dir.exists(file.path(cur, "assets"))) return(cur)
+      up <- dirname(cur)
+      if (identical(up, cur)) break
+      cur <- up
+    }
+  }
+  stop("未找到含 assets/ 的项目根目录")
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+# ---- 本周色彩（只在本周生效；共享 tt_theme.R 不含任何色值）----
+PAL <- list(
+  paper = "#CFE3F5",  # 冷蓝考卷纸
+  ink   = "#1F3A5F",  # 墨
+  brick = "#A63A2E",  # 砖红（Academic）
+  ochre = "#D9A441",  # 芥黄（General Training）
+  body  = "#41628A",  # 推导色：由墨调出的正文蓝灰，只用于轴文字/脚注/参考线
+  edge  = "#B9D2EA"   # 推导色：由纸调出的方格边
+)
+
+# 衬线标题：先查本机字体表，命中 Georgia 才用，否则退回 Segoe UI 并在正文说明
+TT_SERIF <- if ("Georgia" %in% systemfonts::system_fonts()$family) "Georgia" else TT_FONT
+TYPE_COLS <- setNames(c(PAL$brick, PAL$ochre), c("Academic", "General Training"))
+# 数据里的 type 原值是 General_Training（下划线），图例标签统一成 General Training
+TYPE_LAB  <- c(Academic = "Academic", General_Training = "General Training")
+
+# 字号一律取共享阶梯 TT_TYPE（assets/tt_theme.R），本周不再自定义任何字号
+# 字体只留两个家族：Georgia 管标题/副标题/脚注；Segoe UI 管轴、图例与图内数字
+mm <- function(pt) pt / (72.27 / 25.4)   # ggplot geom_text 的 size 单位是 mm；只做单位换算
+
+# 导出底线：显式 device / dpi / 背景色（width、height 每图再显式写）
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi,
+                      dev.args = list(background = PAL$paper))
+
+# 本周版式签名：无网格纸面（只留基线）+ 图例竖排右侧 + 衬线标题
+paper <- function() {
+  tt_base(bg = PAL$paper, ink = PAL$ink, body = PAL$body, grid = PAL$edge,
+          family = TT_FONT) +   # scale 保持 1：字号原样来自 TT_TYPE
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      panel.background = element_rect(fill = PAL$paper, colour = NA),
+      axis.line.x      = element_line(colour = PAL$ink, linewidth = 0.45),
+      axis.ticks       = element_blank(),
+      legend.position      = "right",
+      legend.justification = "center",
+      legend.text  = element_text(family = TT_FONT, colour = PAL$body, size = TT_TYPE[["axis_text"]]),
+      legend.title = element_text(family = TT_FONT, colour = PAL$body, size = TT_TYPE[["annot"]]),
+      axis.title   = element_text(family = TT_FONT, colour = PAL$body, size = TT_TYPE[["axis_title"]]),
+      axis.text    = element_text(family = TT_FONT, colour = PAL$body, size = TT_TYPE[["axis_text"]]),
+      plot.title    = element_text(family = TT_SERIF, colour = PAL$ink, face = "bold",
+                                   size = TT_TYPE[["title"]], hjust = 0, margin = margin(b = 5)),
+      plot.subtitle = element_text(family = TT_SERIF, colour = PAL$body, size = TT_TYPE[["subtitle"]],
+                                   hjust = 0, margin = margin(b = 11)),
+      plot.caption  = element_text(family = TT_SERIF, colour = PAL$body, size = TT_TYPE[["caption"]],
+                                   hjust = 0, margin = margin(t = 11))
+    )
+}
+
+BANDS <- c("<4", "4", "4.5", "5", "5.5", "6", "6.5", "7", "7.5", "8", "8.5", "9")
+# 档位指数用：<4 是开区间，只能给一个名义值 3.5（正文与图注都要交代）
+BAND_NUM <- setNames(c(3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9), BANDS)
+
+dpath <- file.path("..", "data")
+demo_lang <- read_csv(file.path(dpath, "demo_by_first_language.csv"), show_col_types = FALSE)
+demo_nat  <- read_csv(file.path(dpath, "demo_by_nationality.csv"), show_col_types = FALSE)
+demo_rea  <- read_csv(file.path(dpath, "demo_by_reasons.csv"), show_col_types = FALSE)
+perf_lang <- read_csv(file.path(dpath, "performance_by_first_language.csv"), show_col_types = FALSE)
+perf_nat  <- read_csv(file.path(dpath, "performance_by_nationality.csv"), show_col_types = FALSE)
+```
+
+| 本周视觉设计 | |
+| --- | --- |
+| 底色 / 墨 | `#CFE3F5` 冷蓝考卷纸 / `#1F3A5F` |
+| 类别色 | `#A63A2E` 砖红 = Academic；`#D9A441` 芥黄 = General Training（全篇同色同标签） |
+| 辅助色 | `#41628A` 正文蓝灰（轴文字、参考线）、`#B9D2EA` 方格边 |
+| 图表家族 | 哑铃（斜率连线）＋ 分箱构成热图 ＋ 偏差棒棒糖 |
+| 版式签名 | 无网格纸面（只留基线）· 图例竖排右侧 · 衬线标题 ＋ 无衬线轴与图内数字 · 标题到图注逐级变小 |
+| 字体 | 标题、副标题与图注用 `r TT_SERIF`；轴、图例与图内数字用 `r TT_FONT` |
+
+## 口径：`percent` 是组内构成，不是人数
+
+```{r}
+#| label: checks
+#| echo: false
+#| include: false   # 口径自检只在渲染期跑（不过就中断），结果不进报告
+gs_l <- demo_lang |> summarise(tot = sum(percent), k = n(), .by = c(type, language, year))
+gs_n <- demo_nat  |> summarise(tot = sum(percent), k = n(), .by = c(type, nationality, year))
+gs_r <- demo_rea  |> summarise(tot = sum(percent), k = n(), .by = c(type, reason, year))
+
+k_l  <- distinct(demo_lang, type, language, year)
+k_p  <- distinct(perf_lang, type, language, year)
+k_n  <- distinct(demo_nat, type, nationality, year)
+k_pn <- distinct(perf_nat, type, nationality, year)
+same_l <- nrow(anti_join(k_l, k_p, by = c("type", "language", "year"))) == 0 &&
+          nrow(anti_join(k_p, k_l, by = c("type", "language", "year"))) == 0
+same_n <- nrow(anti_join(k_n, k_pn, by = c("type", "nationality", "year"))) == 0 &&
+          nrow(anti_join(k_pn, k_n, by = c("type", "nationality", "year"))) == 0
+
+# 口径断言：不过就中断渲染，绝不出图
+stopifnot(
+  all(gs_l$k == 12), all(gs_n$k == 12), all(gs_r$k == 12),
+  all(abs(gs_l$tot - 1) < 0.031), all(abs(gs_n$tot - 1) < 0.032), all(abs(gs_r$tot - 1) < 0.031),
+  same_l, same_n,
+  sum(duplicated(demo_lang[c("type", "language", "band", "year")])) == 0,
+  sum(duplicated(perf_lang[c("type", "language", "part", "year")])) == 0
+)
+
+# overall 是否等于四科均值（决定 overall 能不能当派生量）
+m4 <- perf_lang |> select(type, language, year, part, score) |>
+  pivot_wider(names_from = part, values_from = score) |>
+  mutate(d = abs(overall - (listening + reading + speaking + writing) / 4))
+m4_nat <- perf_nat |> select(type, nationality, year, part, score) |>
+  pivot_wider(names_from = part, values_from = score) |>
+  mutate(d = abs(overall - (listening + reading + speaking + writing) / 4))
+
+ps_l <- range(gs_l$tot); ps_n <- range(gs_n$tot); ps_r <- range(gs_r$tot)
+n_lang <- n_distinct(demo_lang$language); n_nat <- n_distinct(demo_nat$nationality)
+n_rea  <- n_distinct(demo_rea$reason);   n_yr  <- n_distinct(demo_lang$year)
+n_ty   <- n_distinct(demo_lang$type)
+possible_l <- n_lang * n_ty * n_yr
+possible_n <- n_nat * n_ty * n_yr
+n_per_ty   <- unique((k_l |> count(type, year) |> pull(n)))
+stopifnot(length(n_per_ty) == 1)
+
+tibble(
+  断言 = c("12 档 band 的组内 percent 合计",
+           "组内行数是否 12 档全覆盖",
+           "报考理由 11 类每年每科的合计",
+           "构成表与成绩表是否同一批键",
+           "overall 是否等于四科均值",
+           "键是否有重复"),
+  实测 = c(sprintf("language %.2f–%.2f · nationality %.2f–%.2f · reason %.2f–%.2f",
+                   ps_l[1], ps_l[2], ps_n[1], ps_n[2], ps_r[1], ps_r[2]),
+           sprintf("%d / %d / %d 组全部 12 行", nrow(gs_l), nrow(gs_n), nrow(gs_r)),
+           sprintf("%.1f = 11 类各合计 1（%d 组）",
+                   sum(gs_r$tot[gs_r$type == "Academic" & gs_r$year == "2024-2025"]), nrow(gs_r)),
+           sprintf("language %d 键 / nationality %d 键，两侧键集完全一致：%s",
+                   nrow(k_l), nrow(k_n), ifelse(same_l & same_n, "是", "否")),
+           sprintf("否：最大偏离 %.3f（language）/ %.3f（nationality）", max(m4$d), max(m4_nat$d)),
+           "0 行（两表键均唯一）")
+) |> kable(format = "html", caption = "渲染前先跑的口径断言：不过就中断，不出图")
+```
+
+1. **`percent` 的分母**：每个 `(type, 实体, year)` 组内 12 档的 `percent` 合计恒为 1（实测 `r sprintf("%.2f–%.2f", ps_l[1], ps_l[2])`，偏差来自四舍五入）。所以 `percent` 是**该语言／国籍／理由自身在该学年的档位构成**，不是全体考生的占比：跨语言相加没有意义，也不能用来说"某语言考生更多"。
+2. **行粒度**：五个文件分别是 `r nrow(demo_lang)` / `r nrow(demo_nat)` / `r nrow(demo_rea)` / `r nrow(perf_lang)` / `r nrow(perf_nat)` 行，键为 `type × 实体 × year`（构成表再加 12 档，成绩表再加 5 个 `part`）。`r n_lang` 个 first language、`r n_nat` 个 nationality、`r n_rea` 个报考理由、`r n_yr` 个学年、`r n_ty` 个 `type`。
+3. **构成表与成绩表是同一批键**：language 侧 `r nrow(k_l)` 个键、nationality 侧 `r nrow(k_n)` 个键，两个文件之间的键集**逐一相同**（已逐一比对，两侧完全一致）。这解释了"1200 ≠ 53×5×2×3"的缺口：不是成绩缺列，而是 `r possible_l` 个可能的 `type × language × year` 组合里只有 `r nrow(k_l)` 个被报告——每年每科各 `r n_per_ty` 个语言，三年间共出现 `r n_lang` 个标签（差额来自跨年增删与改拼写，见最后一节）。
+4. **`score` 量纲是雅思 9 分制**：language 侧 `r sprintf("%.2f–%.2f", min(perf_lang$score), max(perf_lang$score))`，nationality 侧 `r sprintf("%.2f–%.2f", min(perf_nat$score), max(perf_nat$score))`。成绩表里 `overall` **不是**四科均值的再聚合（最大偏离 `r sprintf("%.3f", max(m4$d))`，中位 `r sprintf("%.3f", median(m4$d))`）——所以图 1 把 `overall` 单列一排，不当派生量。
+
+## 图 1 ｜ 差距只在输入型技能
+
+```{r}
+#| label: fig-type-gap
+#| echo: false
+#| fig-cap: "The Academic / General Training gap lives in the two receptive skills; speaking and writing are effectively identical."
+#| fig-width: 9.4
+#| fig-height: 4.8
+PART_LAB <- c(listening = "Listening", reading = "Reading", speaking = "Speaking",
+              writing = "Writing", overall = "Overall")
+PART_ORD <- c("reading", "listening", "overall", "speaking", "writing")  # 按差值降序
+
+f1_cells <- perf_lang |> summarise(m = mean(score), cells = n(), .by = c(part, type))
+n_cells_type <- unique(f1_cells$cells)  # 每个 part 每个 type 的 language-year 格子数
+stopifnot(length(n_cells_type) == 1, n_cells_type[1] == 120)
+
+f1 <- f1_cells |> select(part, type, m) |> pivot_wider(names_from = type, values_from = m) |>
+  mutate(gap = Academic - General_Training,
+         part_code = part,
+         part = factor(part, levels = rev(PART_ORD), labels = rev(unname(PART_LAB[PART_ORD]))))
+stopifnot(nrow(f1) == 5)
+
+# 逐年差值（只进表，不重复上图）
+f1_years <- perf_lang |> summarise(m = mean(score), .by = c(part, type, year)) |>
+  pivot_wider(names_from = type, values_from = m) |> mutate(gap = Academic - General_Training) |>
+  select(part, year, gap) |> pivot_wider(names_from = year, values_from = gap) |>
+  rename(g_2223 = `2022-2023`, g_2324 = `2023-2024`, g_2425 = `2024-2025`)
+
+p1 <- ggplot(f1, aes(y = part)) +
+  geom_segment(aes(x = General_Training, xend = Academic, yend = part),
+               colour = PAL$ink, linewidth = 0.55, alpha = 0.45) +
+  geom_point(aes(x = General_Training, colour = "General Training"), size = 3.1) +
+  geom_point(aes(x = Academic, colour = "Academic"), size = 3.1) +
+  geom_text(aes(x = (Academic + General_Training) / 2, label = sprintf("%+.2f", gap)),
+            vjust = -1.35, family = TT_FONT, size = mm(TT_TYPE[["annot"]]), colour = PAL$ink) +
+  scale_colour_manual(values = TYPE_COLS, breaks = c("Academic", "General Training")) +
+  scale_x_continuous(limits = c(5.95, 6.75), breaks = seq(6.0, 6.7, 0.1),
+                     labels = sprintf("%.1f", seq(6.0, 6.7, 0.1))) +
+  labs(
+    title    = "Receptive skills carry the whole exam-type gap",
+    subtitle = tt_strip("POOLED 3 YEARS", sprintf("%d LANGUAGE-YEAR CELLS PER TYPE", n_cells_type[1]),
+                        "MEAN OF CELL MEANS", "5 PARTS"),
+    x = "mean band score", y = NULL,
+    caption  = tt_source("performance_by_first_language.csv", n_cells_type[1] * 2 * 5,
+                         "each point = unweighted mean of 120 language-year cell means (the files carry no candidate counts); the same 40 languages appear in every type-year; no part is missing")
+  ) +
+  paper() +
+  theme(axis.text.y = element_text(family = TT_FONT, colour = PAL$ink, size = TT_TYPE[["axis_text"]])) +
+  guides(colour = guide_legend(title = sprintf("%d cells per type", n_cells_type[1]),
+                               override.aes = list(size = 3.1)))
+p1
+```
+
+**读数**（每点 = `r n_cells_type[1]` 个 language-year 格子的未加权均值；两个类型的格子数相同）：
+
+- 差值为正的只有两科**输入型**技能：Reading `r sprintf("%+.3f", f1$gap[f1$part == "Reading"])`（`r sprintf("%.3f", f1$Academic[f1$part == "Reading"])` vs `r sprintf("%.3f", f1$General_Training[f1$part == "Reading"])`）、Listening `r sprintf("%+.3f", f1$gap[f1$part == "Listening"])`（`r sprintf("%.3f", f1$Academic[f1$part == "Listening"])` vs `r sprintf("%.3f", f1$General_Training[f1$part == "Listening"])`）。
+- 两科**输出型**技能几乎重合：Speaking `r sprintf("%+.3f", f1$gap[f1$part == "Speaking"])`、Writing `r sprintf("%+.3f", f1$gap[f1$part == "Writing"])`——都在 0.04 个档位以内。
+- `Overall` 落在中间（`r sprintf("%+.3f", f1$gap[f1$part == "Overall"])`），但它不是四科均值的派生量（见口径第 4 条），所以这排只作参照。
+
+图 1 的原始数字（与图同源；正文引用的值必须与此表一致）：
+
+```{r}
+#| label: tbl-type-gap
+#| echo: false
+f1_tab <- f1 |> arrange(desc(gap)) |> left_join(f1_years, by = c("part_code" = "part"))
+# 逐年列必须真的接上（part 是 factor，按原值 part_code 连接，否则会静默产生 NA）
+stopifnot(nrow(f1_tab) == 5, !any(is.na(f1_tab$g_2223)), !any(is.na(f1_tab$g_2324)),
+          !any(is.na(f1_tab$g_2425)))
+f1_tab |>
+  transmute(技能 = as.character(part),
+            Academic = sprintf("%.3f", Academic),
+            General_Training = sprintf("%.3f", General_Training),
+            差值 = sprintf("%+.3f", gap),
+            g2223 = sprintf("%+.3f", g_2223),
+            g2324 = sprintf("%+.3f", g_2324),
+            g2425 = sprintf("%+.3f", g_2425)) |>
+  setNames(c("技能", "Academic", "General Training", "差值",
+             "2022-2023", "2023-2024", "2024-2025")) |>
+  kable(format = "html", caption = "图 1 的原始数字（9 分制均分；差值 = Academic − General Training；后三列是同口径的逐年差值）")
+```
+
+逐年看，两科的排序在三个学年里换过一次位：Reading 的差值 `r sprintf("%+.3f", f1_years$g_2223[f1_years$part == "reading"])` → `r sprintf("%+.3f", f1_years$g_2324[f1_years$part == "reading"])` → `r sprintf("%+.3f", f1_years$g_2425[f1_years$part == "reading"])`，而 Listening 是 `r sprintf("%+.3f", f1_years$g_2223[f1_years$part == "listening"])` → `r sprintf("%+.3f", f1_years$g_2324[f1_years$part == "listening"])` → `r sprintf("%+.3f", f1_years$g_2425[f1_years$part == "listening"])`：最近一个学年是 Listening 领先。Writing 在 2022-2023 出现过**负值** `r sprintf("%+.3f", f1_years$g_2223[f1_years$part == "writing"])`，即 General Training 略高于 Academic——所以"说写两科重合"是稳定结论，"哪一科差距最大"不是。
+
+## 图 2 ｜ 高分组是整段右移，不是少数人拉高
+
+```{r}
+#| label: fig-band-heatmap
+#| echo: false
+#| fig-cap: "Three-year band composition by first language: the top of the roster is not a spike at the ceiling, it is the whole profile shifted right."
+#| fig-width: 9.4
+#| fig-height: 7.9
+# 候选池：Academic 下三个学年都出现的语言（每行分母口径一致，且天然排除跨年改名的同一语言）
+cov3  <- demo_lang |> filter(type == "Academic") |> distinct(language, year) |>
+  count(language, name = "yrs")
+keep3 <- cov3$language[cov3$yrs == 3]
+
+shares <- demo_lang |> filter(type == "Academic", language %in% keep3) |>
+  summarise(sh = mean(percent), .by = c(language, band)) |>
+  mutate(band = factor(band, levels = BANDS)) |>
+  group_by(language) |>
+  mutate(bi = sum(sh * BAND_NUM[as.character(band)]) / sum(sh)) |>
+  ungroup()
+
+# 残差桶 Other 不是一种语言，不参与排名（但留在候选池的合并剖面里）
+ranked <- distinct(shares, language, bi) |> filter(language != "Other") |> arrange(desc(bi))
+ord2   <- ranked |> slice_max(bi, n = 20) |> arrange(desc(bi)) |>
+  mutate(rank = row_number(), ypos = 21 - rank)
+h2     <- shares |> filter(language %in% ord2$language) |>
+  left_join(select(ord2, language, rank, ypos), by = "language")
+
+prof2 <- shares |> summarise(p = mean(sh), .by = band) |> arrange(band)
+REF2  <- sum(prof2$p * BAND_NUM[as.character(prof2$band)]) / sum(prof2$p)
+
+h2_tab <- h2 |> summarise(bi = first(bi), peak_band = as.character(band[which.max(sh)]),
+                          peak_sh = max(sh),
+                          hi7  = sum(sh[band %in% c("7", "7.5", "8", "8.5", "9")]),
+                          lo55 = sum(sh[band %in% c("<4", "4", "4.5", "5")]),
+                          .by = language) |>
+  left_join(select(ord2, language, rank), by = "language") |> arrange(rank)
+
+n_rows2 <- sum(demo_lang$type == "Academic" & demo_lang$language %in% ord2$language)
+stopifnot(n_rows2 == 720, nrow(h2) == 240, nrow(h2_tab) == 20)
+
+flow2 <- tt_flow(nrow(demo_lang), n_rows2,
+                 sprintf("仅 Academic（另一个 type 的 %d 行整体剔除）", sum(demo_lang$type != "Academic")),
+                 sprintf("只保留三个学年都出现的语言（剔除 %d 行单年/双年标签）",
+                         sum(demo_lang$type == "Academic") - sum(demo_lang$type == "Academic" & demo_lang$language %in% keep3)),
+                 sprintf("残差桶 Other 不参与排名（候选池 %d 个 -> 排名池 %d 个）",
+                         nrow(distinct(shares, language)), nrow(ranked)),
+                 sprintf("按指数取排名池前 20 个（剔除 %d 个）", nrow(ranked) - 20))
+
+p_heat <- ggplot(h2, aes(x = band, y = ypos)) +
+  geom_tile(aes(fill = sh), width = 0.93, height = 0.9, colour = PAL$paper, linewidth = 0.6) +
+  geom_text(aes(label = ifelse(sh >= 0.20, sprintf("%.0f", sh * 100), "")),
+            family = TT_FONT, size = mm(TT_TYPE[["annot"]]), colour = PAL$paper) +
+  scale_fill_gradientn(
+    colours = c(PAL$paper, "#A8C8E6", "#6E9BC9", "#3B6BA5", PAL$ink),
+    values  = scales::rescale(c(0, 0.06, 0.14, 0.24, 0.36)),
+    limits  = c(0, 0.36), breaks = c(0, 0.1, 0.2, 0.3), labels = scales::percent,
+    oob = scales::squish, name = "share of candidates") +
+  scale_y_continuous(breaks = 1:20, labels = rev(ord2$language),
+                     limits = c(0.5, 20.5), expand = expansion(0, 0)) +
+  scale_x_discrete(expand = expansion(add = 0.55)) +
+  labs(title    = "Where each first language actually sits",
+       subtitle = tt_strip("ACADEMIC ONLY", "3-YEAR MEAN SHARE", "ROW ORDER = BAND INDEX",
+                           sprintf("POOLED PROFILE %.2f", REF2)),
+       x = "band", y = NULL,
+       caption  = tt_source("demo_by_first_language.csv", n_rows2,
+                            paste("Academic only; 720 csv rows collapse to 240 cells (20 languages x 12 bands);",
+                                  "cell = mean of the three yearly within-language shares, which sum to 1 per language-year;",
+                                  "row index = sum(share x band position) with the open band '<4' at 3.5;",
+                                  sprintf("right panel = index drawn as a stem from the pooled profile of all %d three-year languages (%.2f), never a bar from zero; values are listed in the right-hand column;",
+                                          nrow(distinct(shares, language)), REF2),
+                                  "labels reported in fewer than three years and the residual bucket 'Other' stay out of the ranking"))) +
+  paper() +
+  theme(axis.text.y = element_text(family = TT_FONT, colour = PAL$ink, size = TT_TYPE[["axis_text"]]),
+        plot.margin  = margin(16, 6, 12, 16))
+
+p_bar <- ggplot(h2, aes(y = ypos, x = bi)) +
+  geom_vline(xintercept = REF2, colour = PAL$body, linewidth = 0.35, linetype = "22") +
+  geom_segment(aes(x = REF2, xend = bi, yend = ypos), colour = PAL$brick,
+               linewidth = 1.25, lineend = "round") +
+  geom_point(colour = PAL$brick, size = 1.45) +
+  # 数值改成最右侧的定列表：不压参考线、不压点
+  geom_text(aes(x = 8.33, label = sprintf("%.2f", bi)), hjust = 1, family = TT_FONT,
+            size = mm(TT_TYPE[["annot"]]), colour = PAL$ink) +
+  scale_x_continuous(limits = c(6.0, 8.36), breaks = c(6.0, 6.5, 7.0, 7.5),
+                     labels = sprintf("%.1f", c(6.0, 6.5, 7.0, 7.5)),
+                     expand = expansion(0, 0)) +
+  scale_y_continuous(limits = c(0.5, 20.5), breaks = 1:20, expand = expansion(0, 0)) +
+  labs(x = "band index", y = NULL) +
+  paper() +
+  theme(axis.text.y = element_blank(),
+        axis.line.x = element_line(colour = PAL$ink, linewidth = 0.45),
+        plot.margin = margin(16, 10, 12, 2))
+
+p2 <- p_heat + p_bar + plot_layout(widths = c(6.25, 1.6), guides = "collect") &
+  theme(legend.position = "right",
+        legend.title = element_text(family = TT_FONT, colour = PAL$body, size = TT_TYPE[["annot"]]))
+p2
+```
+
+`r flow2`。**图 2 选 first language 而不是 nationality**：language 侧构成表与成绩表的键完全对齐（都是 `r nrow(k_l)` 个键），图 1 也用同一维度，两图共用同一批键；nationality 侧只有 `r nrow(k_n)` 个键、键集不同，还多一对跨年改写的标签（Hong Kong / Iran），换维度会让三张图的样本口径对不上。每条名册行 = 该语言三个学年档位份额的算术平均（**不是**按考生人数加权，数据里没有人数）；左侧格子里的数字是份额（≥20% 才标注），右侧棒是从**所有 `r nrow(distinct(shares, language))` 个三年齐备语言的合并剖面**（指数 `r sprintf("%.2f", REF2)`）拉出来的偏差，不是从 0 起画的柱。
+
+- 合并剖面本身非常窄：`r sprintf("%.1f%%", 100 * sum(prof2$p[prof2$band %in% c("5.5","6","6.5","7","7.5")]))` 的份额落在 5.5–7.5 之间，`r sprintf("%.1f%%", 100 * sum(prof2$p[prof2$band %in% c("7","7.5","8","8.5","9")]))` 在 7 分及以上，5.5 以下只有 `r sprintf("%.1f%%", 100 * sum(prof2$p[prof2$band %in% c("<4","4","4.5","5")]))`。跨语言比较的始终是"每个语言自己的构成"，不是"多少人"。
+- 头部不是天花板上的尖峰：German 指数 `r sprintf("%.2f", h2_tab$bi[h2_tab$language == "German"])`，峰值在 `r h2_tab$peak_band[h2_tab$language == "German"]` 档（`r sprintf("%.1f%%", 100 * h2_tab$peak_sh[h2_tab$language == "German"])`），7 分及以上合计 `r sprintf("%.1f%%", 100 * h2_tab$hi7[h2_tab$language == "German"])`，而 5.5 以下只有 `r sprintf("%.2f%%", 100 * h2_tab$lo55[h2_tab$language == "German"])`——整段右移。名册末位 Telugu 的 7 分及以上份额仍有 `r sprintf("%.1f%%", 100 * h2_tab$hi7[h2_tab$language == "Telugu"])`。
+- 名册是按**指数**截取的前 20 个（指数 `r sprintf("%.2f", max(h2_tab$bi))` – `r sprintf("%.2f", min(h2_tab$bi))`），不是"考生最多的 20 个"：数据里没有任何人数，任何前 N 都只能按结果统计量选。这个口径在图注与下表里都写明。
+
+```{r}
+#| label: tbl-band-heatmap
+#| echo: false
+h2_tab |>
+  transmute(语言 = language,
+            档位指数 = sprintf("%.3f", bi),
+            峰值档位 = peak_band,
+            峰值份额 = sprintf("%.1f%%", 100 * peak_sh),
+            hi7c = sprintf("%.1f%%", 100 * hi7),
+            lo55c = sprintf("%.1f%%", 100 * lo55)) |>
+  setNames(c("语言", "档位指数", "峰值档位", "峰值份额", "7 分及以上", "5.5 以下")) |>
+  kable(format = "html", caption = "图 2 的原始数字（Academic，三个学年的档位份额平均；与热图同一份聚合）")
+```
+
+```{r}
+#| label: tbl-pooled-profile
+#| echo: false
+prof2 |>
+  transmute(档位 = as.character(band),
+            份额 = sprintf("%.2f%%", 100 * p),
+            累计份额 = sprintf("%.1f%%", 100 * cumsum(p))) |>
+  kable(format = "html", caption = sprintf("图 2 的合并剖面：%d 个三年齐备语言的档位份额平均（份额不含任何名义值；累计列自低档向上累加）",
+                                           nrow(distinct(shares, language))))
+```
+
+## 图 3 ｜ 报考理由的分化比考试类型更宽
+
+```{r}
+#| label: fig-reasons
+#| echo: false
+#| fig-cap: "Purpose of taking the test separates candidates more than test type does: the spread across the 11 reasons is far wider than the Academic / General Training gap in speaking and writing."
+#| fig-width: 9.4
+#| fig-height: 5.9
+SHORT_MAP <- tribble(
+  ~reason, ~short,
+  "(Other)", "Other / unstated",
+  "For employment", "Employment",
+  "For higher education extended course (three months or more)", "Higher education: extended course",
+  "For higher education short course (three months or less)", "Higher education: short course",
+  "For immigration", "Immigration",
+  "For other education purposes", "Other education purposes",
+  "For personal reasons", "Personal reasons",
+  "For professional registration (NOT medical)", "Professional registration (non-medical)",
+  "For registration as a dentist", "Registration as a dentist",
+  "For registration as a doctor", "Registration as a doctor",
+  "For registration as a nurse (including CGFNS)", "Registration as a nurse"
+)
+
+r3 <- demo_rea |> mutate(bn = BAND_NUM[band]) |>
+  summarise(bi = sum(percent * bn) / sum(percent), .by = c(type, reason))
+REF3 <- mean(r3$bi)
+stopifnot(nrow(SHORT_MAP) == 11, all(unique(r3$reason) %in% SHORT_MAP$reason),
+          nrow(r3) == 22, all((r3 |> count(type) |> pull(n)) == 11))
+
+stopifnot(all(!is.na(TYPE_LAB[r3$type])))  # 图例标签映射必须覆盖数据里的每个 type
+ord3 <- r3 |> summarise(mid = mean(bi), .by = reason) |> arrange(mid) |> mutate(rank = row_number())
+r3 <- r3 |> left_join(ord3, by = "reason") |>
+  mutate(type_lab = unname(TYPE_LAB[type]),
+         ypos = rank + ifelse(type == "Academic", 0.18, -0.18))
+r3_tab <- r3 |> select(type, reason, bi) |> pivot_wider(names_from = type, values_from = bi) |>
+  mutate(gap = Academic - General_Training)
+
+p3 <- ggplot(r3, aes(colour = type_lab)) +
+  geom_vline(xintercept = REF3, colour = PAL$body, linewidth = 0.35, linetype = "22") +
+  geom_segment(aes(x = REF3, xend = bi, y = ypos, yend = ypos), linewidth = 0.6, lineend = "round") +
+  geom_point(aes(x = bi, y = ypos), size = 2.5) +
+  annotate("text", x = REF3, y = 11.85, label = sprintf("pooled %.2f", REF3),
+           family = TT_FONT, size = mm(TT_TYPE[["annot"]]), colour = PAL$body, hjust = -0.12) +
+  scale_colour_manual(values = TYPE_COLS, breaks = c("Academic", "General Training")) +
+  scale_x_continuous(limits = c(5.5, 7.4), breaks = seq(5.5, 7.5, 0.5),
+                     labels = sprintf("%.1f", seq(5.5, 7.5, 0.5))) +
+  scale_y_continuous(breaks = 1:11,
+                     labels = SHORT_MAP$short[match(ord3$reason, SHORT_MAP$reason)],
+                     limits = c(0.4, 12.1), expand = expansion(0, 0)) +
+  labs(title    = "Why you sit the test moves the band index more than which test you sit",
+       subtitle = tt_strip("11 REASONS x 2 TYPES", "3-YEAR MEAN OF WITHIN-REASON SHARES",
+                           "STEM FROM THE POOLED LINE"),
+       x = "band index", y = NULL,
+       caption  = tt_source("demo_by_reasons.csv", nrow(demo_rea),
+                            paste("same index as figure 2 (band share weighted by band position, '<4' at 3.5);",
+                                  sprintf("pooled line = mean of the 22 reason-type indexes (%.2f);", REF3),
+                                  "all 11 reasons are reported for all three years in both types;",
+                                  "reason short names map back to the full labels in the table below the figure"))) +
+  paper() +
+  theme(axis.text.y = element_text(family = TT_FONT, colour = PAL$ink, size = TT_TYPE[["axis_text"]])) +
+  guides(colour = guide_legend(title = "33 reason-year cells per type",
+                               override.aes = list(size = 2.5, linewidth = 0.8)))
+p3
+```
+
+```{r}
+#| label: reason-year-numbers
+#| echo: false
+# 逐年指数：正文 inline 在本页表格之前求值，必须在这里先算好
+ry_tab <- demo_rea |> mutate(bn = BAND_NUM[band]) |>
+  summarise(bi = sum(percent * bn) / sum(percent), .by = c(type, reason, year)) |>
+  filter(type == "Academic") |> select(reason, year, bi) |>
+  pivot_wider(names_from = year, values_from = bi) |>
+  rename(y2223 = `2022-2023`, y2324 = `2023-2024`, y2425 = `2024-2025`) |>
+  left_join(SHORT_MAP, by = "reason") |>
+  mutate(rng = pmax(y2223, y2324, y2425) - pmin(y2223, y2324, y2425)) |>
+  arrange(desc(y2425))
+ry_top  <- ry_tab$short[which.max(ry_tab$y2425)]
+ry_bot  <- ry_tab$short[which.min(ry_tab$y2425)]
+ry_max  <- ry_tab |> slice_max(rng, n = 1)
+ry_rest <- max(ry_tab$rng[ry_tab$short != ry_max$short])
+stopifnot(identical(ry_max$short, "Immigration"), nrow(ry_tab) == 11)
+```
+
+**读数**：
+
+- 同一个口径下，**理由内部的跨度比两科之差更大**：Academic 的 11 个理由指数从 `r sprintf("%.2f", min(r3_tab$Academic))`（Higher education: short course）到 `r sprintf("%.2f", max(r3_tab$Academic))`（Registration as a doctor），跨度 `r sprintf("%.2f", diff(range(r3_tab$Academic)))`；General Training 从 `r sprintf("%.2f", min(r3_tab$General_Training))` 到 `r sprintf("%.2f", max(r3_tab$General_Training))`，跨度 `r sprintf("%.2f", diff(range(r3_tab$General_Training)))`。对比图 1 里 Speaking / Writing 的 `r sprintf("%.3f", f1$gap[f1$part == "Speaking"])` / `r sprintf("%.3f", f1$gap[f1$part == "Writing"])`，不是一个量级。
+- 高的一头是**执业注册类**：doctor `r sprintf("%.2f", r3_tab$Academic[r3_tab$reason == "For registration as a doctor"])`、dentist `r sprintf("%.2f", r3_tab$Academic[r3_tab$reason == "For registration as a dentist"])`、nurse `r sprintf("%.2f", r3_tab$Academic[r3_tab$reason == "For registration as a nurse (including CGFNS)"])`（均为 Academic）；低的一头是短期高等教育与个人原因。这个头尾顺序在三个学年里没有换过位，唯一的例外是 Immigration：三年里上移 `r sprintf("%.3f", ry_max$rng)`，中途与 Employment 换过一次位（逐年见下表）。
+- 两科的差值在理由维度上**时正时负**：正得最多的是 Employment `r sprintf("%+.2f", r3_tab$gap[r3_tab$reason == "For employment"])`，接近零甚至反向的是 Immigration `r sprintf("%+.2f", r3_tab$gap[r3_tab$reason == "For immigration"])`、Registration as a dentist `r sprintf("%+.2f", r3_tab$gap[r3_tab$reason == "For registration as a dentist"])` 与 Personal reasons `r sprintf("%+.2f", r3_tab$gap[r3_tab$reason == "For personal reasons"])`。所以"Academic 比 General Training 高"只在部分理由上成立。
+
+```{r}
+#| label: tbl-reasons
+#| echo: false
+r3_tab |>
+  left_join(SHORT_MAP, by = "reason") |>
+  arrange(desc(Academic)) |>
+  transmute(理由 = reason, 图内短名 = short,
+            Academic = sprintf("%.3f", Academic),
+            General_Training = sprintf("%.3f", General_Training),
+            差值 = sprintf("%+.3f", gap)) |>
+  setNames(c("理由（数据原值）", "图内短名", "Academic", "General Training", "差值")) |>
+  kable(format = "html", caption = "图 3 的原始数字（档位指数；短名 → 全名的映射在此可查）")
+```
+
+```{r}
+#| label: tbl-reason-years
+#| echo: false
+ry_tab |>
+  transmute(理由 = short,
+            a = sprintf("%.3f", y2223), b = sprintf("%.3f", y2324), c = sprintf("%.3f", y2425),
+            极差 = sprintf("%.3f", rng)) |>
+  setNames(c("理由", "2022-2023", "2023-2024", "2024-2025", "三年极差")) |>
+  kable(format = "html", caption = sprintf("Academic 每个理由的档位指数逐年：头尾（%s / %s）三年没换位；单条最大移动是 %s 的 %.3f，其余都 ≤ %.3f",
+                                           ry_top, ry_bot, ry_max$short, ry_max$rng, ry_rest))
+```
+
+```{r}
+#| label: typography-audit
+#| echo: false
+#| include: false   # 排版自检只在渲染期跑（越阶/超家族即中断），结果不进报告
+aud <- bind_rows(
+  tt_audit(p1)     |> mutate(figure = "figure 1"),
+  tt_audit(p_heat) |> mutate(figure = "figure 2 - heatmap panel"),
+  tt_audit(p_bar)  |> mutate(figure = "figure 2 - index panel"),
+  tt_audit(p3)     |> mutate(figure = "figure 3")
+) |> select(figure, element, size, family, in_ladder)
+
+aud_sizes <- sort(unique(aud$size[!is.na(aud$size)]))
+aud_fams  <- sort(unique(aud$family[!is.na(aud$family)]))
+aud_bad   <- sum(!aud$in_ladder)
+aud_ok    <- length(aud_sizes) <= TT_TYPE_MAX && length(aud_fams) <= TT_FAMILY_MAX && aud_bad == 0
+stopifnot(aud_ok)   # 越阶 / 超数量 / 超家族直接中断渲染
+aud_verdict <- sprintf("字号种类 %d / 上限 %d（%s）· 家族数 %d / 上限 %d（%s）· 越阶 %d —— %s",
+                       length(aud_sizes), TT_TYPE_MAX, paste(aud_sizes, collapse = " / "),
+                       length(aud_fams), TT_FAMILY_MAX, paste(aud_fams, collapse = " + "),
+                       aud_bad, if (aud_ok) "通过" else "不通过")
+cat(aud_verdict, "\n", file = stderr())   # 判定只进渲染日志，不进报告
+# 审计明细只进渲染日志（include: false），不生成任何报告元素
+aud
+```
+
+
+
+## 数据异常（只报不改）
+
+```{r}
+#| label: alias-audit
+#| echo: false
+# 标签近似检测：adist ≤ 2 或前缀关系；只有"两边年份集合不相交"才判定为跨年改名
+near_pairs <- function(df, col, dset) {
+  labs <- sort(unique(df[[col]]))
+  yrs  <- df |> distinct(.data[[col]], year) |>
+    summarise(s = paste(sort(year), collapse = ","), .by = all_of(col))
+  ys <- setNames(yrs$s, yrs[[col]])
+  out <- list()
+  for (i in seq_along(labs)) for (j in seq_along(labs)) {
+    if (i >= j) next
+    a <- labs[i]; b <- labs[j]
+    d <- as.numeric(utils::adist(a, b, ignore.case = TRUE))
+    pre <- startsWith(a, b) || startsWith(b, a)
+    if (d <= 2 || pre) {
+      ya <- strsplit(ys[[a]], ",")[[1]]; yb <- strsplit(ys[[b]], ",")[[1]]
+      disjoint <- length(intersect(ya, yb)) == 0
+      out[[length(out) + 1]] <- tibble(
+        数据集 = dset, 标签A = a, 标签B = b, 编辑距离 = d,
+        A出现 = ys[[a]], B出现 = ys[[b]],
+        判断 = if (disjoint) "跨年改名（年份不相交）" else "同年并存，不是改名")
+    }
+  }
+  bind_rows(out)
+}
+alias_tab <- bind_rows(near_pairs(demo_lang, "language", "first_language"),
+                       near_pairs(demo_nat, "nationality", "nationality"))
+renames   <- alias_tab |> filter(grepl("^跨年改名", 判断)) |>
+  mutate(旧 = ifelse(substr(A出现, 1, 4) <= substr(B出现, 1, 4), 标签A, 标签B),
+         新 = ifelse(旧 == 标签A, 标签B, 标签A),
+         旧年 = ifelse(旧 == 标签A, A出现, B出现),
+         新年 = ifelse(旧 == 标签A, B出现, A出现))  # 按出现年份排出 旧 -> 新，不按字母序
+coexists  <- alias_tab |> filter(grepl("^同年并存", 判断))
+
+absent_l <- possible_l - nrow(k_l)
+absent_n <- possible_n - nrow(k_n)
+```
+
+| 异常 | 实测 | 处置 |
+| --- | --- | --- |
+| `percent` 组内合计有 1–3 个百分点漂移 | language `r sprintf("%.2f–%.2f", ps_l[1], ps_l[2])`、nationality `r sprintf("%.2f–%.2f", ps_n[1], ps_n[2])`、reason `r sprintf("%.2f–%.2f", ps_r[1], ps_r[2])` | 判定为四舍五入，不改数据；图 2 的行指数按组内实际合计归一 |
+| `r n_lang` 个 first language 但每年每科只有 `r n_per_ty` 个 | `r possible_l` 个 `type × language × year` 组合里缺 `r absent_l` 个（nationality 侧 `r possible_n` 里缺 `r absent_n` 个），且构成表与成绩表**缺的是同一组**（键集逐一相同） | 缺的是整组合，不是缺列；图 2 只取三年齐备的语言（`r flow2`） |
+| 同一实体跨年换拼写 | `r paste(sprintf("%s：%s（%s）→ %s（%s）", renames$数据集, renames$旧, renames$旧年, renames$新, renames$新年), collapse = "；")` | 不合并、不改标签；这些标签因此天然被"三年齐备"筛掉，不会在热图里被拆成两行 |
+| 近似但**不是**改名 | `r paste(sprintf("%s / %s", coexists$标签A, coexists$标签B), collapse = "；")` | 一律不合并。Dari 只在 2024-2025 出现且与 Farsi 同年并存 → 是新增标签，不是 Farsi 的改写；Chile / China、China / Ghana、Algeria / Nigeria、Iran / Oman 只是编辑距离 ≤ 2 的巧合，同年并存，与改名无关 |
+| `overall` 不是四科均值的再聚合 | language 侧最大偏离 `r sprintf("%.3f", max(m4$d))`（中位 `r sprintf("%.3f", median(m4$d))`），nationality 侧 `r sprintf("%.3f", max(m4_nat$d))` | 图 1 把 `overall` 单列，不当派生量；不重算 |
+| 两个成绩文件的极值不同量级 | language 侧最高 `r sprintf("%.3f", max(perf_lang$score))`（`r perf_lang$type[which.max(perf_lang$score)]` · `r perf_lang$language[which.max(perf_lang$score)]` · `r perf_lang$part[which.max(perf_lang$score)]`），nationality 侧最高 `r sprintf("%.3f", max(perf_nat$score))`（`r TYPE_LAB[perf_nat$type[which.max(perf_nat$score)]]` · `r perf_nat$nationality[which.max(perf_nat$score)]` · `r perf_nat$part[which.max(perf_nat$score)]`） | 两个维度是不同粒度的切分，本报告不做跨维度比较 |
+| 报考理由的 `percent` 也是档位构成 | 每个 `type × reason × year` 内 12 档合计 1（`r nrow(gs_r)` 组），11 个理由各自合计 1、总和 = 11 —— **不是**"选该理由的人数占比" | 图 3 只用档位指数，不从该文件推断理由的人气排序 |
+
+```{r}
+#| label: tbl-alias
+#| echo: false
+alias_tab |>
+  transmute(数据集, 标签A, 标签B, 编辑距离, A出现, B出现, 判断) |>
+  kable(format = "html", caption = "标签近似对：编辑距离 ≤ 2 或前缀关系；只有年份不相交才判定为跨年改名")
+```
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/demo_by_first_language.csv`（`r nrow(demo_lang)` × 5）、`demo_by_nationality.csv`（`r nrow(demo_nat)` × 5）、`demo_by_reasons.csv`（`r nrow(demo_rea)` × 5）、`performance_by_first_language.csv`（`r nrow(perf_lang)` × 5）、`performance_by_nationality.csv`（`r nrow(perf_nat)` × 5） |
+| 图 1 样本 | `performance_by_first_language.csv` 全量 `r nrow(perf_lang)` 行，无剔除；每个 `type × part` 折成 1 个均值，共 10 个点 |
+| 图 2 样本 | `r flow2` |
+| 图 3 样本 | `demo_by_reasons.csv` 全量 `r nrow(demo_rea)` 行，无剔除；22 个"理由 × 类型"指数 |
+| 全篇共同口径 | 均值一律是**格子均值**（language-year / reason-year 格子等权），因为五个文件里没有任何候选人数；`percent` 一律读作组内档位构成 |
+| 档位指数 | `sum(份额 × 档位位置)`，档位位置取 `<4 → 3.5`、`4 → 4` … `9 → 9`；`<4` 是开区间，只能给名义值，故指数是**名册内的排序刻度**，不是雅思官方分 |
+| 不画的东西 | 饼图、双 Y 轴、从 0 起画的截断柱、考生人数（数据里没有）、跨维度（语言 ↔ 国籍）比较 |

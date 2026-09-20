@@ -1,0 +1,290 @@
+---
+title: "Palomar 星系光谱 探索性可视化"
+subtitle: "TidyTuesday · 2026-08-11 (Week 32)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 诊断平面：星系按电离机制分开
+
+<!-- 视觉身份（维护者注，勿渲染）：深空暗场 #0d1117 ＋ 光谱冷暖（青 #3FB8A6 / 石板灰 #8B93A3 / 琥珀 #E0A24E / 珊瑚 #D9563F）；图表家族 = 诊断平面分面散点 ＋ 区间点阵；版式签名 = 等宽字数据条副标题 ＋ 面板细描边 ＋ 图例置顶左对齐单行。 -->
+
+本周用暗场呈现：发光天体本来就该出现在暗底上。四类天体各有固定颜色，贯穿本页两张图。
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(ggplot2)
+  library(knitr)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi)
+
+# ---- 本周色彩（只在本周生效；共享 theme 不含任何色值）----
+PAL <- list(
+  bg   = "#0d1117",
+  ink  = "#F2EFE9",
+  body = "#98A1B0",
+  grid = "#1d2634",
+  rule = "#2b3648",
+  `H II`     = "#3FB8A6",
+  Transition = "#8B93A3",
+  LINER      = "#E0A24E",
+  Seyfert    = "#D9563F"
+)
+
+sv <- read_csv("../data/palomar_survey.csv", show_col_types = FALSE)
+el <- read_csv("../data/palomar_emission_lines.csv", show_col_types = FALSE)
+
+# 正文要引用的计数在这里先算好（正文 inline 会早于后面的 chunk 求值）
+src_txt <- sv |> count(activity_type) |> filter(!is.na(activity_type)) |>
+  arrange(desc(n)) |> mutate(s = paste0(activity_type, " ", n)) |> pull(s) |> paste(collapse = "\u3001")
+```
+
+`palomar_survey.csv` 有 486 个星系、20 个字段，其中 415 个带 `activity_type` 标签（`r src_txt`）。问题很直接：**能不能只靠几条谱线比值，就把恒星形成星系和各类活动星系核分开？**
+
+本报告的诊断平面以谱线比值的 log10 为坐标。四列虽以 `log_` 命名，列内却是线性比值而非对数值，直接当坐标用会画错，因此统一自行取对数。
+
+```{r}
+#| label: ratio-semantics
+#| echo: false
+#| include: false
+# 这四列名字带 log_ 前缀，实测值却是线性比值 —— 画 BPT 必须自己取 log10。
+# 断言不过就中断渲染，绝不出图。
+j <- inner_join(el, sv, by = "galaxy_name")
+d_nii  <- max(abs(j$log_nii_ha - j$nii_6583), na.rm = TRUE)
+d_oi   <- max(abs(j$log_oi_ha  - j$oi_6300), na.rm = TRUE)
+d_sii  <- max(abs(j$log_sii_ha - (j$sii_6716 + j$sii_6731)), na.rm = TRUE)
+r_oiii <- cor(j$log_oiii_hb, j$oiii_5007 / j$h_beta, use = "complete.obs")
+stopifnot(d_nii < 0.05, d_oi < 0.05, d_sii < 0.05, abs(r_oiii) > 0.999)
+
+tibble(
+  断言 = c("max|log_nii_ha - nii_6583|",
+           "max|log_oi_ha - oi_6300|",
+           "max|log_sii_ha - (sii_6716 + sii_6731)|",
+           "cor(log_oiii_hb, oiii_5007 / h_beta)"),
+  实测 = c(sprintf("%.3f", d_nii), sprintf("%.3f", d_oi),
+           sprintf("%.3f", d_sii), sprintf("%.4f", r_oiii)),
+  结论 = c("与流量比逐位一致 → 是线性比值，不是对数",
+           "与流量比逐位一致 → 是线性比值",
+           "与双臂流量和逐位一致 → 是线性比值",
+           "线性同量纲（差一个常数缩放，非同名副本）")
+) |> kable(format = "html", caption = "415 个可连表星系上的列语义校验")
+```
+
+## 入图样本
+
+```{r}
+#| label: prep
+#| echo: false
+# 四个比值齐备才入图：三个平面共用同一批星系，n 一致、可比
+d4 <- sv |>
+  filter(!is.na(activity_type), activity_type != "Absorption") |>
+  transmute(
+    galaxy = galaxy_name,
+    cls    = activity_type,
+    oiii   = log10(log_oiii_hb),
+    nii    = log10(log_nii_ha),
+    sii    = log10(log_sii_ha),
+    oi     = log10(log_oi_ha)
+  ) |>
+  filter(is.finite(oiii), is.finite(nii), is.finite(sii), is.finite(oi))
+
+cls_levels <- c("H II", "Transition", "LINER", "Seyfert")
+d4 <- d4 |> mutate(cls = factor(cls, levels = cls_levels))
+labs_cls <- d4 |> count(cls, name = "n") |> arrange(cls) |>
+  mutate(lab = sprintf("%s  (n=%d)", cls, n))
+d4  <- d4 |> left_join(labs_cls |> select(cls, lab), by = "cls")
+COLS <- setNames(unname(unlist(PAL[cls_levels])), labs_cls$lab)
+
+n_use   <- nrow(d4)
+cnt_txt <- paste0(labs_cls$cls, " ", labs_cls$n, collapse = "、")
+
+# 未分类是否等于缺测：先查再写
+na_rows <- sum(is.na(sv$activity_type))
+na_pair <- sum(is.na(sv$activity_type) &
+               is.finite(log10(sv$log_nii_ha)) & is.finite(log10(sv$log_oiii_hb)))
+
+# 口径链：原始行数 -> 入图行数（正文、图注、方法表共用同一份聚合）
+flow_txt <- tt_flow(nrow(sv), nrow(d4),
+                    sprintf("%d 行无 activity_type 且缺 [N II] 或 [O III] 比值", na_rows),
+                    "1 个 Absorption 天体（n=1）")
+```
+
+`r nrow(sv)` 行里 `r na_rows` 行没有 `activity_type` 标签，而这些行**没有一行**同时具备 [N II]/Hα 与 [O III]/Hβ 比值（可算 `r na_pair` 行）——所以「未分类」在数据里等于「缺测」，不能当第五个类别。另有 1 个天体标为 Absorption，n=1 不成组，也不入图。最终入图 `r n_use` 个星系（`r cnt_txt`）。
+
+## 三个诊断平面
+
+```{r}
+#| label: fig-bpt
+#| echo: false
+#| fig-cap: "Three diagnostic planes, one split: star-forming galaxies hold the low-ionization corner, AGN classes the high-ionization corner."
+#| fig-width: 9.6
+#| fig-height: 5.4
+bpt <- d4 |>
+  pivot_longer(c(nii, sii, oi), names_to = "plane", values_to = "x") |>
+  mutate(plane = factor(plane,
+    levels = c("nii", "sii", "oi"),
+    labels = c("[N II] / H\u03b1", "[S II] / H\u03b1", "[O I] / H\u03b1")))
+
+p_bpt <- ggplot(bpt, aes(x, oiii, colour = lab)) +
+  geom_hline(yintercept = 0, colour = PAL$rule, linewidth = 0.3) +
+  geom_vline(xintercept = 0, colour = PAL$rule, linewidth = 0.3) +
+  geom_point(alpha = 0.72, size = 1.7, stroke = 0) +
+  facet_wrap(~ plane, scales = "free_x", nrow = 1) +
+  scale_colour_manual(values = COLS, breaks = labs_cls$lab) +
+  labs(
+    title    = "Three planes, one split",
+    subtitle = tt_strip("PALOMAR SURVEY", sprintf("%d GALAXIES", n_use), "LOG10 LINE RATIOS", "3 PLANES"),
+    x = NULL, y = expression(log[10] ~ "[O III] / H" * beta),
+    caption  = tt_source("palomar_survey.csv", n_use,
+                         "407 of 486 galaxies: 71 unlabelled rows have no usable ratio pair, 1 Absorption object excluded; log10 recomputed; demarcation lines intentionally not drawn")
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid) +
+  theme(
+    panel.border     = element_rect(colour = PAL$rule, fill = NA, linewidth = 0.4),
+    strip.background = element_blank(),
+    strip.text       = element_text(colour = PAL$ink, face = "bold", family = TT_FONT, size = TT_TYPE[["axis_title"]]),
+    plot.subtitle    = element_text(family = TT_MONO, colour = PAL$body, size = TT_TYPE[["subtitle"]], hjust = 0, margin = margin(b = 10)),
+    plot.caption     = element_text(family = TT_MONO, colour = PAL$body, size = TT_TYPE[["caption"]], hjust = 0, margin = margin(t = 10)),
+    axis.text.y      = element_text(family = TT_MONO, size = TT_TYPE[["axis_text"]]),
+    panel.spacing    = unit(16, "pt"),
+    legend.key.spacing.x = unit(9, "pt")
+  ) +
+  guides(colour = guide_legend(nrow = 1, override.aes = list(size = 2.8, alpha = 1)))
+
+p_bpt
+```
+
+**读数**：左下角全是青色的 H II，右上角是琥珀的 LINER 与珊瑚的 Seyfert——三种比值给出的分离方向一致。轴向本身也说明物理：纵轴越高（[O III]/Hβ 越强）代表电离越硬，横轴越右（低电离谱线相对 Hα 越强）代表激发越偏向 AGN。本报告只陈述图上分布，不引用文献分界线（无可引证系数来源，故不画）。
+
+## 四类到底靠哪个比值分开
+
+```{r}
+#| label: fig-ratio-ladder
+#| echo: false
+#| fig-cap: "Class medians and interquartile ranges across four ratios: the Seyfert / LINER split lives in [O III] / H-beta, not in [N II] / H-alpha."
+#| fig-width: 9.2
+#| fig-height: 5.2
+lad <- d4 |>
+  select(cls, lab, nii, sii, oi, oiii) |>
+  pivot_longer(c(nii, sii, oi, oiii), names_to = "ratio", values_to = "v") |>
+  summarise(med = median(v), q1 = quantile(v, 0.25), q3 = quantile(v, 0.75), n = n(),
+            .by = c(cls, lab, ratio)) |>
+  mutate(ratio = factor(ratio, levels = c("oiii", "oi", "sii", "nii"),
+    labels = c("[O III] / H\u03b2", "[O I] / H\u03b1", "[S II] / H\u03b1", "[N II] / H\u03b1")))
+
+p_lad <- ggplot(lad, aes(x = med, xmin = q1, xmax = q3, y = ratio, colour = lab)) +
+  geom_vline(xintercept = 0, colour = PAL$rule, linewidth = 0.4) +
+  geom_pointrange(position = position_dodge(width = 0.62), size = 0.42, linewidth = 0.72) +
+  scale_colour_manual(values = COLS, breaks = labs_cls$lab) +
+  labs(
+    title    = "Where the classes actually separate",
+    subtitle = tt_strip("MEDIAN", "INTERQUARTILE RANGE", "4 RATIOS", "LOG10"),
+    x = expression(log[10] ~ "line ratio"), y = NULL,
+    caption  = tt_source("palomar_survey.csv", n_use,
+                         "point = median, bar = IQR; same 407 of 486 galaxies and same four classes as the panel figure")
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid) +
+  theme(
+    axis.text.y     = element_text(family = TT_MONO, colour = PAL$ink, size = TT_TYPE[["axis_text"]]),
+    plot.subtitle   = element_text(family = TT_MONO, colour = PAL$body, size = TT_TYPE[["subtitle"]], hjust = 0, margin = margin(b = 10)),
+    plot.caption    = element_text(family = TT_MONO, colour = PAL$body, size = TT_TYPE[["caption"]], hjust = 0, margin = margin(t = 10)),
+    legend.key.spacing.x = unit(9, "pt")
+  ) +
+  # pointrange 的图例符号按点大小走，2.8 会变成巨点 —— 这里单独压到 0.8
+  guides(colour = guide_legend(nrow = 1, override.aes = list(size = 0.8, linewidth = 0.9, alpha = 1)))
+
+p_lad
+```
+
+**读数**（中位数 [下四分位, 上四分位]，均为 log10）：
+
+- H II 在四个比值上全部最低：[N II] −0.43 [−0.53, −0.32]、[S II] −0.54 [−0.64, −0.43]、[O I] −1.59 [−1.82, −1.39]、[O III] −0.31 [−0.59, 0.00]。
+- Seyfert 的 [O III]/Hβ 最高：0.75 [0.58, 0.97]，比 H II 高 1.06 dex，是四类里唯一上四分位逼近 1 的。
+- **Seyfert 与 LINER 的区分不在 [N II]/Hα**：0.15 [−0.03, 0.37] 对 0.24 [0.11, 0.34]，区间大幅重叠；把它们分开的是 [O III]/Hβ（0.75 对 0.24）。
+- Transition 在四个比值上都夹在 H II 与 AGN 之间，但 [O I]/Hα（−0.92 [−1.04, −0.85]）比 LINER（−0.54）和 Seyfert（−0.65）都更靠近 H II 一侧。
+
+图 2 的数字基础（各类别在四个比值上的 log10 中位数与四分位，四类共用同一批星系）：
+
+```{r}
+#| label: tbl-ratio-numbers
+#| echo: false
+lad |>
+  arrange(ratio, cls) |>
+  transmute(类别 = as.character(cls), 比值 = as.character(ratio),
+            中位数 = sprintf("%+.2f", med),
+            下四分位 = sprintf("%+.2f", q1),
+            上四分位 = sprintf("%+.2f", q3), n) |>
+  kable(format = "html", caption = "图 2 的原始数字：log10 中位数与四分位（n = 407，四类共用同一批星系）")
+```
+
+```{r}
+#| label: typography-audit
+#| echo: false
+#| include: false
+audit <- bind_rows(
+  tt_audit(p_bpt) |> mutate(figure = "fig 1 (BPT panels)"),
+  tt_audit(p_lad) |> mutate(figure = "fig 2 (ratio ladder)")
+)
+audit |>
+  filter(!is.na(size) | !is.na(family)) |>
+  mutate(阶梯 = ifelse(is.na(size), "-", ifelse(in_ladder, "TT_TYPE", "**超出阶梯**"))) |>
+  select(图 = figure, 元素 = element, 字号 = size, 家族 = family, 阶梯) |>
+  kable(format = "html", caption = "图内显式设定的字体元素（判据：字号 ∈ TT_TYPE 且种类 ≤ 6，家族数 ≤ 2）")
+
+type_sizes <- audit |> filter(!is.na(size)) |> distinct(size) |> nrow()
+type_fams  <- audit |> filter(!is.na(family)) |> distinct(family) |> nrow()
+# 硬闸：越阶 / 超字号种类 / 超家族 直接中断渲染；本 chunk include: false，结果只进渲染日志
+stopifnot(sum(!audit$in_ladder) == 0, type_sizes <= TT_TYPE_MAX, type_fams <= TT_FAMILY_MAX)
+cat(sprintf("排版自检（仅渲染日志）：字号种类 %d / 上限 %d · 家族数 %d / 上限 %d · 越阶 %d\n",
+            type_sizes, TT_TYPE_MAX, type_fams, TT_FAMILY_MAX, sum(!audit$in_ladder)))
+```
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | 主数据源 `data/palomar_survey.csv`（486 × 20）；`data/palomar_emission_lines.csv`（418 × 8）用于核对四个比值列的量纲 |
+| 入图样本 | `r n_use` 个星系：带 activity_type 标签、且四个比值全部有值 |
+| 剔除 | 71 行无标签（经查全部缺 [N II] 或 [O III] 比值）；1 个 Absorption 天体（n=1） |
+| 口径链（原始 → 入图） | `r flow_txt`；图例与脚注一律按入图口径 `r n_use` 报数 |
+| 比值口径 | 对 `log_nii_ha` / `log_sii_ha` / `log_oi_ha` / `log_oiii_hb` 四列**自行取 log10**：列名带 log_ 前缀，但列内是线性比值，不是对数值 |
+| 不画的东西 | 文献分界线（找不到可引证的系数来源）；未分类不当作类别 |

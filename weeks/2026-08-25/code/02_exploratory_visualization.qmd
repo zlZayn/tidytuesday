@@ -1,0 +1,569 @@
+---
+title: "乡村音乐词曲作者生态：榜单长尾与歌词词频"
+subtitle: "TidyTuesday · 2026-08-25 · 484 首乡村电台 Top 30 歌曲的作者、制作人与歌词"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 写歌的人多，还是做歌的人多
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr); library(tidyr); library(readr); library(stringr)
+  library(ggplot2); library(scales); library(knitr)
+  library(tidytext); library(geomtextpath)
+})
+
+# 项目根：从当前目录逐级上溯，找到含 assets/ 的目录（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi)
+
+# ---- 本周视觉身份（只在本周声明；共享 theme 不含任何色值）----
+# 深酒红场 = 场；羊皮纸 = 墨与全体作者曲线；黄铜 = 主创作者曲线；石板 = 制作人曲线与基线
+PAL <- list(
+  field = "#7A2E3C",
+  parch = "#F0E2CE",
+  brass = "#C9A227",
+  slate = "#5A6270"
+)
+
+# 字号一律取自共享的 TT_TYPE 阶梯（title 16 / subtitle 13 / axis_title 11 / axis_text 9.5 / annot 8.5 / caption 7.5）
+mm <- function(pt) pt * 0.352778   # geom_text 的 size 单位是 mm，TT_TYPE 的单位是 pt
+
+cl <- read_csv("../data/country_lyrics.csv", show_col_types = FALSE)
+aw <- read_csv("../data/top_all_writers.csv", show_col_types = FALSE)
+pw <- read_csv("../data/top_primary_writers.csv", show_col_types = FALSE)
+pp <- read_csv("../data/top_producers.csv", show_col_types = FALSE)
+```
+
+> **本周视觉身份**：**深酒红场 `#7A2E3C`** ＋ **羊皮纸 `#F0E2CE`** ＋ **黄铜 `#C9A227`** ＋ **石板 `#5A6270`**；图表家族 = **双对数秩–规模曲线** ＋ **文本词频条形**；版式签名 = **曲线末梢直接贴标签（无图例）＋ 大面积留白 ＋ 只留一条基线**。颜色在这里不是装饰：石板 `#5A6270` 在这张酒红场上的对比度只有 1.3:1（实测），所以它只做线条、基线与网格，文字一律走羊皮纸或黄铜。
+
+```{r}
+#| label: facts
+#| echo: false
+# ---- 歌曲层事实 ----
+n_rows      <- nrow(cl)
+n_artists   <- n_distinct(cl$artist)
+dup_title   <- cl |> count(song) |> filter(n > 1)
+dup_pairs   <- cl |> filter(song %in% dup_title$song) |>
+  transmute(txt = sprintf("%s（%s, %d）", song, artist, entered_top_30_in)) |> pull(txt)
+n_feat_rows  <- sum(!is.na(cl$featuring))
+n_feat_names <- cl |> filter(!is.na(featuring)) |>
+  separate_longer_delim(featuring, delim = ",") |> mutate(nm = str_trim(featuring)) |>
+  distinct(nm) |> nrow()
+
+# ---- 榜单文件的形状 ----
+n_aw <- nrow(aw); n_aw0 <- sum(aw$song_count == 0)
+n_pp <- nrow(pp)
+n_pw_rows <- nrow(pw)
+pw_u <- pw |> group_by(writer) |> summarise(song_count = max(song_count), .groups = "drop")
+n_pw <- nrow(pw_u); n_pw_dup <- n_pw_rows - n_pw
+pw_dup_name <- pw |> count(writer, name = "k") |> filter(k > 1) |>
+  left_join(pw, by = "writer") |> arrange(desc(song_count)) |> slice(1) |> pull(writer)
+pw_dup_vals <- pw |> filter(writer == pw_dup_name) |> arrange(desc(song_count)) |> pull(song_count)
+
+# ---- 用歌词 writers 字段重算 ----
+w_tok <- cl |> select(song_id = rough_order, writers) |>
+  separate_longer_delim(writers, delim = ",") |>
+  mutate(writer = str_trim(writers)) |> filter(writer != "")
+n_wtok <- nrow(w_tok); n_wuniq <- n_distinct(w_tok$writer)
+w_cnt <- w_tok |> count(writer, name = "derived")
+recon <- aw |> rename(file_count = song_count) |> full_join(w_cnt, by = "writer")
+n_same  <- sum(recon$file_count == recon$derived, na.rm = TRUE)
+n_diff  <- sum(recon$file_count != recon$derived, na.rm = TRUE)
+max_gap <- max(abs(recon$file_count - recon$derived), na.rm = TRUE)
+n_higher <- sum(recon$file_count > recon$derived, na.rm = TRUE)
+n_lower  <- sum(recon$file_count < recon$derived, na.rm = TRUE)
+miss_names <- recon |> filter(is.na(file_count)) |> arrange(desc(derived)) |> pull(writer)
+n_miss <- length(miss_names)
+n_zero_seen <- sum(recon$file_count == 0, na.rm = TRUE)
+
+variant_tbl <- tibble(
+  lyrics_side = c("Scotty Mccreery", "Jessie Jo Dillon", "HARDY", "Chris Dubois", "Weston Davis", "Bretty Young"),
+  file_side   = c("Scotty McCreery", "Jessie Jo DIllon", "Michael Hardy", "Chris DuBois", "Westin Davis", "Brett Young")
+) |> filter(lyrics_side %in% w_cnt$writer, file_side %in% aw$writer)
+
+# ---- 主创作者文件与全量榜单的关系 ----
+n_pw_in_aw <- sum(pw_u$writer %in% aw$writer)
+n_pw_same  <- pw_u |> inner_join(aw, by = "writer", suffix = c("_pw", "_aw")) |>
+  filter(song_count_pw == song_count_aw) |> nrow()
+pw_only <- setdiff(pw_u$writer, aw$writer)
+a_all <- sort(aw$song_count, decreasing = TRUE)
+b_prim <- sort(pw_u$song_count, decreasing = TRUE)
+n_prefix <- sum(cumprod(head(a_all, length(b_prim)) == b_prim) == 1)
+
+# ---- 制作人 ----
+p_tok <- cl |> filter(!is.na(producer)) |> select(song_id = rough_order, producer) |>
+  separate_longer_delim(producer, delim = ",") |>
+  mutate(producer = str_trim(producer)) |> filter(producer != "")
+n_ptok <- nrow(p_tok); n_puniq <- n_distinct(p_tok$producer)
+p_cnt <- p_tok |> count(producer, name = "derived")
+recon_p <- pp |> rename(file_count = song_count) |> full_join(p_cnt, by = "producer")
+n_psame   <- sum(recon_p$file_count == recon_p$derived, na.rm = TRUE)
+n_pmiss   <- sum(is.na(recon_p$file_count))
+n_pdiff   <- sum(recon_p$file_count != recon_p$derived, na.rm = TRUE)
+max_pgap  <- max(abs(recon_p$file_count - recon_p$derived), na.rm = TRUE)
+n_phigher <- sum(recon_p$file_count > recon_p$derived, na.rm = TRUE)
+n_plower  <- sum(recon_p$file_count < recon_p$derived, na.rm = TRUE)
+
+# ---- 每首歌的作者数与制作人数 ----
+nw <- lengths(strsplit(cl$writers, ","))
+np <- rep(NA_integer_, n_rows)
+np[!is.na(cl$producer)] <- lengths(strsplit(cl$producer[!is.na(cl$producer)], ","))
+mean_writers <- mean(nw)
+share_ge4    <- 100 * mean(nw >= 4)
+n_one_writer <- sum(nw == 1)
+n_solo_song  <- cl |> filter(nw == 1) |>
+  transmute(txt = sprintf("%s（%s, %d）", song, artist, entered_top_30_in)) |> pull(txt)
+max_writer_song <- cl |> filter(nw == max(nw)) |>
+  transmute(txt = sprintf("%s（%s, %d, %d 位作者）", song, artist, entered_top_30_in, max(nw))) |> pull(txt)
+by_year <- cl |> mutate(n_writers = nw, n_prod = np) |> group_by(year = entered_top_30_in) |>
+  summarise(songs = n(), mean_writers = mean(n_writers), share_ge4 = 100 * mean(n_writers >= 4),
+            mean_prod = mean(n_prod, na.rm = TRUE), .groups = "drop")
+share_multi_prod <- 100 * mean(np > 1, na.rm = TRUE)
+```
+
+`country_lyrics.csv` 收录 **`r n_rows` 首**进入乡村电台 Top 30 的歌曲（2013–2019），涉及 `r n_artists` 位歌手。同名歌只有一组：`r paste(dup_pairs, collapse = " / ")` —— 不同歌手、不同年份，是两首作品，不是重复行；`r n_rows - 1` 个歌名唯一。
+
+榜单文件给出三类角色：**`r n_aw` 位词曲作者**、**`r n_pw_rows` 行"主创作者"**、**`r n_pp` 位制作人**。两个问题：写歌的人比做歌的人多多少，头部集中度是不是同一种形状？七年里歌词最常出现的词换了没有？
+
+## 先把三份榜单的口径钉死
+
+```{r}
+#| label: tbl-files
+#| echo: false
+tibble(
+  文件 = c("country_lyrics.csv", "top_all_writers.csv", "top_primary_writers.csv", "top_producers.csv"),
+  规模 = c(sprintf("%d 行 × 8 列", n_rows), sprintf("%d 行 × 2 列", n_aw),
+           sprintf("%d 行 × 2 列", n_pw_rows), sprintf("%d 行 × 2 列", n_pp)),
+  计数取值 = c("—", sprintf("0–%d", max(aw$song_count)),
+             sprintf("%d–%d", min(pw$song_count), max(pw$song_count)),
+             sprintf("%d–%d", min(pp$song_count), max(pp$song_count))),
+  本轮处置 = c(
+    "行 = 一首歌；rough_order 1–484 唯一且按年份递增，用作行 ID",
+    sprintf("剔除 %d 行 song_count = 0（双对数无法取对数），其余全部入图", n_aw0),
+    sprintf("先按同名取最大计数折叠 %d 行重名 → %d 位；文件本身不是降序", n_pw_dup, n_pw),
+    "无 0 值、无重名、已降序，直接入图"
+  )
+) |> kable(format = "html", caption = "表 1 · 四个输入文件的口径与处置")
+```
+
+**榜单文件不是歌词的精确重算**，这是本周最需要先说清的一条：
+
+```{r}
+#| label: tbl-recon
+#| echo: false
+tibble(
+  对账项 = c("计数一致的行", "计数不一致的行", "最大差额", "文件偏高 / 文件偏低",
+           "只出现在歌词侧的名字", "文件计 0 却在歌词里出现"),
+  全体词曲作者 = c(sprintf("%d / %d", n_same, n_aw), sprintf("%d", n_diff),
+    sprintf("%d 首", max_gap), sprintf("%d / %d", n_higher, n_lower),
+    sprintf("%d 个", n_miss), sprintf("%d 个", n_zero_seen)),
+  制作人 = c(sprintf("%d / %d", n_psame, n_pp), sprintf("%d", n_pdiff),
+    sprintf("%d 首", max_pgap), sprintf("%d / %d", n_phigher, n_plower),
+    sprintf("%d 个", n_pmiss), "0 个")
+) |> kable(format = "html",
+  caption = "表 2 · 榜单文件 vs 歌词字段重算（重算口径：writers 按逗号切分后逐首计数）")
+```
+
+三个必须记住的细节：
+
+1. **`top_all_writers.csv` 有 `r n_aw0` 行 `song_count = 0`**，而这 `r n_zero_seen` 个名字在歌词 `writers` 字段里都出现过、重算各 1 首（Keifer Thompson、Shawna Thompson、Westin Davis……）。0 在双对数上无定义，图 1 把它们剔除并写明差额，不静默丢。
+2. **`top_primary_writers.csv` 有 `r n_pw_dup` 行重名**（`r pw_dup_name` 出现两次，计数 `r paste(pw_dup_vals, collapse = " 与 ")`），而且文件没有按计数降序。折叠成 `r n_pw` 位后，其中 **`r n_pw_in_aw` 位同时出现在全量作者榜里，且 `r n_pw_same` 位计数完全相同** —— "主创作者"不是另一套统计，而是同一份统计切出来的一段；唯一不在全量榜里的是 `r paste(pw_only, collapse = "、")`。
+3. **制作人榜只覆盖重算结果的一部分**：从歌词切分可得 `r n_puniq` 位制作人，文件收录 `r n_pp` 位，其中 `r n_pmiss` 位只在歌词里出现；两边计数差最大 `r max_pgap` 首。
+
+作者名还有拼写与别名两套写法，直接决定"重算 vs 榜单"能不能对上：
+
+```{r}
+#| label: tbl-variant
+#| echo: false
+variant_tbl |> rename(歌词侧写法 = lyrics_side, 榜单侧写法 = file_side) |>
+  kable(format = "html", caption = "表 3 · 同一个人的两套写法（大小写、别名、错拼各举其例）")
+```
+
+## 图 1：三条秩–规模曲线
+
+```{r}
+#| label: fig-rank
+#| fig-cap: "Three leaderboards on one log-log plane: writers and producers are both heavy-headed power-law lines, and the 'primary writers' slice hugs the writer line before the two part."
+#| fig-width: 9.6
+#| fig-height: 5.9
+#| echo: false
+mk_rank <- function(d, vcol, ser_name, col) {
+  d |> filter(.data[[vcol]] >= 1) |> arrange(desc(.data[[vcol]])) |>
+    transmute(series = ser_name, col = col, size = .data[[vcol]], rank = row_number())
+}
+rs <- bind_rows(
+  mk_rank(aw,   "song_count", "all writers",     PAL$parch),
+  mk_rank(pw_u, "song_count", "primary writers", PAL$brass),
+  mk_rank(pp,   "song_count", "producers",       PAL$slate)
+)
+ser <- rs |> group_by(series, col) |> summarise(n = n(), .groups = "drop") |>
+  mutate(lab = sprintf("%s · %d", series, n))
+n_pts <- nrow(rs)
+fits <- rs |> group_by(series) |> group_modify(function(d, k) {
+  m <- lm(log10(rank) ~ log10(size), data = d)
+  tibble(slope = unname(coef(m)[2]), r2 = summary(m)$r.squared)
+}) |> ungroup()
+fit_txt <- paste(sprintf("%s %+.2f (R2 %.2f)", fits$series, fits$slope, fits$r2), collapse = " · ")
+flow1 <- tt_flow(n_aw + n_pw_rows + n_pp, n_pts,
+                 sprintf("%d all-writer rows have song_count = 0 (log undefined)", n_aw0),
+                 sprintf("%d duplicate names in the primary list collapsed by max", n_pw_dup))
+
+# 直标：每条曲线自己的留白带上，水平书写（走 geomtextpath，不旋转）
+#   黄铜 —— 头部曲线正上方的空场；两条尾标 —— 各自 y=1 尾部点带的正上方
+prim_anchor <- rs |> filter(series == "primary writers") |> slice(8)
+lab_xy <- rs |> group_by(series) |> slice_max(rank, n = 1) |> ungroup() |>
+  left_join(ser |> select(series, lab), by = "series") |>
+  transmute(series = series, lab = lab,
+            col = if_else(series == "primary writers", PAL$brass, PAL$parch),
+            # 黄铜曲线头部很陡：标签放在头部第 8 名正上方（该点计数 x 1.5），水平且不压线
+            x = case_when(series == "primary writers" ~ prim_anchor$rank,
+                          series == "producers"       ~ rank * 0.75,
+                          TRUE                        ~ rank * 1.1),
+            y = if_else(series == "primary writers", prim_anchor$size * 1.5, 1.35),
+            xend = x * 3.2)
+lab_path <- bind_rows(lab_xy, lab_xy |> mutate(x = xend)) |> arrange(series, x)
+
+# 头部直标：两张写作者榜单共用同一个起点（Ashley Gorley 44 首）
+head_lab <- bind_rows(
+  aw |> slice_max(song_count, n = 1) |>
+    transmute(y = song_count, col = PAL$parch,
+              lab = sprintf("%s · %d songs · head of both writer lists", writer, song_count)),
+  pp |> slice_max(song_count, n = 1) |>
+    transmute(y = song_count, col = PAL$parch,
+              lab = sprintf("%s · %d songs", producer, song_count))
+) |> mutate(x = 1.12)
+
+p1 <- ggplot(rs, aes(rank, size)) +
+  geom_hline(yintercept = 1, colour = PAL$slate, linewidth = 0.45) +
+  # 羊皮纸在下、黄铜在上：两条写作者曲线前段逐位相同，用线宽做"包边"而不是挪位置
+  geom_line(data = rs |> filter(series == "all writers"), aes(colour = col),
+            linewidth = 1.7, lineend = "round") +
+  geom_line(data = rs |> filter(series == "producers"), aes(colour = col),
+            linewidth = 1.05, lineend = "round") +
+  geom_line(data = rs |> filter(series == "primary writers"), aes(colour = col),
+            linewidth = 0.75, lineend = "round") +
+  geom_point(aes(colour = col), size = 0.95, stroke = 0) +
+  geom_textpath(data = lab_path, aes(x = x, y = y, label = lab, colour = col, group = series),
+                straight = TRUE, halign = "left", text_only = TRUE,
+                size = mm(TT_TYPE[["annot"]]), fontface = "bold", family = TT_FONT) +
+  geom_text(data = head_lab, aes(x = x, y = y, label = lab, colour = col),
+            hjust = 0, vjust = -0.8, size = mm(TT_TYPE[["annot"]]), fontface = "bold", family = TT_FONT) +
+  scale_colour_identity() +
+  scale_x_log10(limits = c(1, 2600), breaks = c(1, 5, 10, 25, 50, 100, 250, 500)) +
+  scale_y_log10(limits = c(0.92, 92), breaks = c(1, 2, 5, 10, 20, 50)) +
+  labs(
+    title    = "The writer pool is one shallow line; 'primary writers' is its head",
+    subtitle = tt_strip("LOG-LOG RANK-SIZE", sprintf("%d ROWS -> %d POINTS", n_aw + n_pw_rows + n_pp, n_pts),
+                        "FLOOR LINE = 1 SONG"),
+    x = "rank within the pool (log scale)", y = "songs credited (log scale)",
+    caption  = tt_source("top_all_writers.csv + top_primary_writers.csv + top_producers.csv", n_pts,
+      paste0(flow1, "; power-law OLS on log10(rank) ~ log10(songs): ", fit_txt,
+             "; the two writer curves share the same first ", n_prefix,
+             " ranks and are drawn as one cased line (parchment under, brass over); ",
+             "each label sits on its own curve tip, no legend; slate carries lines only - at 1.3:1 on this field it cannot carry text"))
+  ) +
+  tt_base(bg = PAL$field, ink = PAL$parch, body = PAL$parch, grid = PAL$slate) +
+  theme(
+    panel.grid.major = element_blank(),
+    plot.title       = element_text(size = TT_TYPE[["title"]]),
+    axis.title       = element_text(size = TT_TYPE[["axis_title"]]),
+    axis.text        = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["axis_text"]]),
+    plot.subtitle    = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["subtitle"]], hjust = 0, margin = margin(b = 12)),
+    plot.caption     = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["caption"]], hjust = 0, margin = margin(t = 12)),
+    plot.margin      = margin(18, 22, 14, 18)
+  )
+p1
+```
+
+**读数**（都取自上图的同一份聚合）：
+
+- 三条曲线在双对数上都接近直线，幂律斜率分别是 `r sprintf("%+.2f", fits$slope[fits$series == "all writers"])`（R² `r sprintf("%.2f", fits$r2[fits$series == "all writers"])`）、`r sprintf("%+.2f", fits$slope[fits$series == "primary writers"])`（`r sprintf("%.2f", fits$r2[fits$series == "primary writers"])`）、`r sprintf("%+.2f", fits$slope[fits$series == "producers"])`（`r sprintf("%.2f", fits$r2[fits$series == "producers"])`）。
+- 头部：制作人榜第一名 `r pp$producer[1]` `r pp$song_count[1]` 首，比任何一位词曲作者都多；作者榜第一名 `r aw$writer[1]` `r aw$song_count[1]` 首，占 `r n_rows` 首歌的 `r sprintf("%.1f%%", 100 * aw$song_count[1] / n_rows)`。两条写作者曲线共用这个起点。
+- 尾巴：全量榜里 **`r sum(aw$song_count == 1)` 位作者只写了 1 首**（`r sprintf("%.0f%%", 100 * mean(aw$song_count == 1))`），制作人榜里 1 首的有 `r sum(pp$song_count == 1)` 位（`r sprintf("%.0f%%", 100 * mean(pp$song_count == 1))`）。
+- **"主创作者"不是第二种分布**：它和全量作者榜的前 `r n_prefix` 名逐位相同（同计数、同顺序），之后才分叉，所以看起来更陡（斜率 `r sprintf("%+.2f", fits$slope[fits$series == "primary writers"])` 对 `r sprintf("%+.2f", fits$slope[fits$series == "all writers"])`）。能作为"两个生态"比较的是写作者与制作人两条完整曲线，不是这三条并列。
+
+## 图 2：歌词词频的两个年代
+
+```{r}
+#| label: words
+#| echo: false
+# 段落标签 [Chorus:] 一类先从歌词里摘掉（不用正则，避免转义）
+strip_tags <- function(x) {
+  parts <- str_split(x, fixed("["))[[1]]
+  if (length(parts) == 1) return(x)
+  rest <- vapply(parts[-1], function(p) {
+    sp <- str_split_fixed(p, fixed("]"), 2)
+    if (identical(sp[1, 1], p)) "" else sp[1, 2]
+  }, character(1))
+  str_squish(paste(c(parts[1], rest), collapse = " "))
+}
+n_tagged <- sum(str_detect(cl$lyrics, fixed("[")))
+STOP_LEX <- tidytext::stop_words |> distinct(word) |> pull(word)
+FRAG <- c("don", "doesn", "didn", "isn", "ain", "won", "can", "couldn", "shouldn", "wouldn",
+          "wasn", "aren", "hasn", "haven", "hadn", "y", "t", "s", "m", "re", "ve", "ll", "d", "o")
+INTERJ <- c("oh", "yeah", "hey", "whoa", "woah", "na", "la", "uh", "mmm", "ooh", "ay", "ah", "eh", "em", "til")
+DROP <- c(STOP_LEX, FRAG, INTERJ)
+
+songs <- cl |> mutate(era = if_else(entered_top_30_in <= 2015, "early", "late"),
+                      lyrics_clean = vapply(lyrics, strip_tags, character(1)))
+tok_raw <- songs |> select(song_id = rough_order, era, lyrics_clean) |> unnest_tokens(word, lyrics_clean)
+n_tok_raw <- nrow(tok_raw)
+n_apostrophe <- sum(str_detect(tok_raw$word, fixed("'")) | str_detect(tok_raw$word, fixed("’")))
+tok <- tok_raw |> filter(!word %in% DROP,
+                         !str_detect(word, fixed("'")), !str_detect(word, fixed("’")),
+                         nchar(word) >= 3, !str_detect(word, "^[0-9]+$"))
+n_tok <- nrow(tok); n_vocab <- n_distinct(tok$word)
+drop_top <- tok_raw |> filter(!word %in% tok$word) |> count(word, sort = TRUE) |> slice_head(n = 8)
+drop_top_txt <- paste(sprintf("%s %d", drop_top$word, drop_top$n), collapse = "、")
+
+ERA <- c(early = "2013-2015", late = "2016-2019")
+ERACOL <- setNames(c(PAL$brass, PAL$parch), unname(ERA))
+nsong_era <- songs |> count(era)
+n_early <- nsong_era$n[nsong_era$era == "early"]
+n_late  <- nsong_era$n[nsong_era$era == "late"]
+
+# 一份聚合同时供图 2、图 3、表 4 使用：以"歌"为文档单位，避免副歌重复把词次吹大
+docc <- tok |> distinct(era, song_id, word) |> count(era, word, name = "n_songs") |>
+  pivot_wider(names_from = era, values_from = n_songs, values_fill = 0)
+all_share <- tok |> distinct(song_id, word) |> count(word, name = "songs_all") |>
+  mutate(pct_all = 100 * songs_all / n_rows)
+dfq <- docc |>
+  mutate(pct_early = 100 * early / n_early, pct_late = 100 * late / n_late,
+         gap = pct_late - pct_early) |>
+  left_join(all_share, by = "word")
+top16 <- dfq |> arrange(desc(pct_all)) |> slice_head(n = 16)
+mv_down <- top16 |> arrange(gap) |> slice_head(n = 3)
+mv_up   <- top16 |> arrange(desc(gap)) |> slice_head(n = 3)
+mv_txt  <- function(d) paste(sprintf("%s %+.0f", d$word, d$gap), collapse = "、")
+mv_flat <- top16 |> arrange(abs(gap)) |> slice_head(n = 2)
+pct_of  <- function(w, which = c("early", "late")) {
+  which <- match.arg(which)
+  dfq[[paste0("pct_", which)]][dfq$word == w]
+}
+
+# 图 3 的口径常量：必须在正文 inline R 之前定义（knitr 按文档顺序求值）
+A_PRIOR <- 1
+SUPPORT <- 25
+lg      <- function(y, n) log((y + A_PRIOR) / (n + 2 * A_PRIOR - y - A_PRIOR))
+se_lg   <- function(y, n) sqrt(1 / (y + A_PRIOR) + 1 / (n + A_PRIOR - y))
+```
+
+```{r}
+#| label: fig-words
+#| fig-cap: "Lyric vocabulary across two eras: the same handful of words dominates both halves, but the later half leans on body and world words where the earlier half leaned on baby, girl and night."
+#| fig-width: 9.6
+#| fig-height: 6.6
+#| echo: false
+bar2 <- top16 |> select(word, pct_early, pct_late) |>
+  pivot_longer(c(pct_early, pct_late), names_to = "era", values_to = "pct") |>
+  mutate(era_lab = factor(ERA[sub("pct_", "", era)], levels = unname(ERA)),
+         word = factor(word, levels = rev(top16$word)))
+# 同一个词两年代数值接近（差 < 2 个百分点）时，条形末端的两个数值会上下压盖：
+# 只在这类词条把早/晚两个标签分别向下/向上微移，其余行仍居中——只修压盖，不改版式
+bar2 <- bar2 |>
+  group_by(word) |>
+  mutate(lab_v = if_else(diff(range(pct)) < 2 & era == "pct_late", 0.14, 0.5)) |>
+  ungroup()
+labs_path <- tibble(x = c(0.8, 16.0), y = 17.4, lab = unname(ERA), col = unname(ERACOL))
+
+p2 <- ggplot(bar2, aes(pct, word, fill = era_lab)) +
+  geom_vline(xintercept = 0, colour = PAL$slate, linewidth = 0.45) +
+  geom_col(width = 0.58, position = position_dodge(width = 0.68)) +
+  geom_text(aes(label = sprintf("%.0f", pct), colour = era_lab, vjust = lab_v),
+            position = position_dodge(width = 0.68), hjust = -0.45, size = mm(TT_TYPE[["annot"]]),
+            family = TT_MONO, show.legend = FALSE) +
+  # 年代标签直接写在图内左上角，用颜色代替图例框
+  geom_text(data = labs_path, aes(x = x, y = y, label = lab, colour = col),
+            hjust = 0, size = mm(TT_TYPE[["annot"]]), fontface = "bold", family = TT_FONT, inherit.aes = FALSE) +
+  scale_fill_manual(values = ERACOL) +
+  scale_colour_manual(values = ERACOL) +
+  scale_x_continuous(limits = c(0, 62), breaks = c(0, 20, 40, 60),
+                     labels = function(v) paste0(v, "%"), expand = c(0, 0)) +
+  scale_y_discrete(expand = expansion(add = c(0.75, 1.5))) +
+  labs(
+    title    = "The same words, two eras: baby fades, eyes and world move up",
+    subtitle = paste(
+      tt_strip(sprintf("%d SONGS: %d EARLY + %d LATE", n_rows, n_early, n_late),
+               "SHARE OF SONGS USING THE WORD"),
+      tt_strip(sprintf("%s TOKENS -> %s KEPT", format(n_tok_raw, big.mark = ","), format(n_tok, big.mark = ",")),
+               "BARS = TOP 16 BY OVERALL SHARE"),
+      sep = "\n"),
+    x = "share of that era's songs containing the word", y = NULL,
+    caption  = tt_source("country_lyrics.csv (lyrics column)", n_rows,
+      paste0(tt_flow(n_rows, n_rows, sprintf("%d songs carry [Verse]/[Chorus] tags, stripped before tokenising", n_tagged)),
+             "; 2013-2015 has ", n_early, " songs and 2016-2019 has ", n_late,
+             ", so raw counts are not comparable across the two bars, every bar is a share of its own era; ",
+             "removed: tidytext stop_words (SMART + snowball + onix), contractions and their fragments (can't, there's, ain ...), ",
+             "interjections (oh, yeah, hey ...); kept ", format(n_tok, big.mark = ","), " tokens over ",
+             format(n_vocab, big.mark = ","), " word types; bars show the top 16 words by overall share"))
+  ) +
+  tt_base(bg = PAL$field, ink = PAL$parch, body = PAL$parch, grid = PAL$slate) +
+  theme(
+    panel.grid.major = element_blank(),
+    plot.title    = element_text(size = TT_TYPE[["title"]]),
+    axis.text.y   = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["axis_text"]]),
+    axis.text.x   = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["axis_text"]]),
+    axis.title.x  = element_text(colour = PAL$parch, size = TT_TYPE[["axis_title"]], margin = margin(t = 8)),
+    plot.subtitle = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["subtitle"]], hjust = 0, margin = margin(b = 12)),
+    plot.caption  = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["caption"]], hjust = 0, margin = margin(t = 12)),
+    plot.margin   = margin(18, 22, 14, 18)
+  )
+p2
+```
+
+**读数**：
+
+- 两个年代的样本量不同（`r n_early` vs `r n_late` 首），所以条形是"该年代里用到这个词的歌曲占比"，不是原始次数；正文与表 4 用的是同一份占比表。
+- 全场最高频的词是 **`r top16$word[1]`**：2013–2015 有 `r sprintf("%.0f%%", pct_of(top16$word[1], "early"))` 的歌曲用到，2016–2019 降到 `r sprintf("%.0f%%", pct_of(top16$word[1], "late"))`。
+- 就在图上这 16 个词里，掉得最狠的三个是 `r mv_txt(mv_down)`；涨得最多的是 `r mv_txt(mv_up)`（单位：百分点）。
+- 骨架没动：图上 16 个词里最稳的两个是 `r mv_flat$word[1]` 与 `r mv_flat$word[2]`，差只有 `r sprintf("%+.1f", mv_flat$gap[1])` 与 `r sprintf("%+.1f", mv_flat$gap[2])` 个百分点（其余 14 个都在动）。
+
+```{r}
+#| label: tbl-words
+#| echo: false
+t4 <- top16 |> transmute(word = word, e = sprintf("%.0f%%", pct_early), l = sprintf("%.0f%%", pct_late),
+                         a = sprintf("%.0f%%", pct_all), g = sprintf("%+.0f", gap), cnt = songs_all)
+names(t4) <- c("词", "2013-2015", "2016-2019", "全部 484 首", "差（百分点）", "出现于几首")
+kable(t4, format = "html",
+      caption = "表 4 · 图 2 的同一份聚合（占比 = 用过该词的歌曲 / 该年代歌曲数；末列 = 全部 484 首里用到该词的歌曲数）")
+```
+
+## 图 3：把 16 个高频词之外的变化也读出来
+
+图 2 只能显示 16 个词，而"占比差"受两个年代样本量不等的影响。图 3 换一个口径：只保留在全部 484 首里至少用过 `r SUPPORT` 首的词，算**加一平滑的对数几率（log-odds）**——后期用到这个词的几率相对前期的倍数。条形向左 = 更偏 2013–2015，向右 = 更偏 2016–2019。
+
+```{r}
+#| label: fig-movers
+#| fig-cap: "Beyond the top 16: add-one smoothed log-odds of a song using each word, later era against earlier era, for words used in at least 15 of the 484 songs. Brass bars lean to 2013-2015, parchment bars to 2016-2019."
+#| fig-width: 9.6
+#| fig-height: 6.2
+#| echo: false
+movers <- dfq |> filter(songs_all >= SUPPORT) |>
+  mutate(lo = lg(late, n_late) - lg(early, n_early),
+         z  = lo / sqrt(se_lg(late, n_late)^2 + se_lg(early, n_early)^2)) |>
+  arrange(desc(abs(z))) |> slice_head(n = 14) |> arrange(lo) |>
+  mutate(word = factor(word, levels = word),
+         leans = if_else(lo > 0, unname(ERA["late"]), unname(ERA["early"])),
+         lab = sprintf("%.0f%% -> %.0f%%", pct_early, pct_late))
+lim <- max(abs(movers$lo)) * 1.45
+brks <- c(-1, -0.5, 0, 0.5, 1); brks <- brks[abs(brks) <= lim]
+side_txt <- function(d) paste(sprintf("%s（%.0f%% → %.0f%%，%+.2f）", as.character(d$word), d$pct_early, d$pct_late, d$lo), collapse = "、")
+mv_late_txt  <- movers |> filter(lo > 0) |> slice_max(lo, n = 3) |> side_txt()
+mv_early_txt <- movers |> filter(lo < 0) |> slice_min(lo, n = 3) |> side_txt()
+n_late_side  <- sum(movers$lo > 0)
+n_early_side <- sum(movers$lo < 0)
+
+p3 <- ggplot(movers, aes(lo, word)) +
+  geom_vline(xintercept = 0, colour = PAL$slate, linewidth = 0.45) +
+  geom_col(aes(fill = leans), width = 0.55) +
+  geom_text(aes(label = lab, colour = leans), hjust = ifelse(movers$lo > 0, -0.09, 1.09),
+            size = mm(TT_TYPE[["annot"]]), family = TT_MONO) +
+  scale_fill_manual(values = ERACOL) +
+  scale_colour_manual(values = ERACOL) +
+  scale_x_continuous(limits = c(-lim, lim), breaks = brks,
+                     labels = function(v) sprintf("%+.1f", v)) +
+  scale_y_discrete(expand = expansion(add = 0.7)) +
+  labs(
+    title    = "Which words moved most between the two halves",
+    subtitle = tt_strip("LOG-ODDS · RANKED BY |Z|", sprintf("SUPPORT %d+ SONGS", SUPPORT),
+                        "EARLY -> LATE SHARE AT BAR END"),
+    x = "log-odds that a song uses the word (2016-2019 vs 2013-2015)", y = NULL,
+    caption  = tt_source("country_lyrics.csv (lyrics column)", n_rows,
+      paste0("log-odds computed on song shares (", n_early, " early songs vs ", n_late,
+             " late songs), add-one smoothing; bars are log-odds, ranked by |z| (log-odds over its posterior SE); ",
+             "support filter = word used in at least ", SUPPORT, " of ", n_rows,
+             " songs, which keeps one-off words out; ",
+             "same token set as figure 2: ", format(n_tok, big.mark = ","), " kept of ",
+             format(n_tok_raw, big.mark = ","), " raw tokens; top 14 movers"))
+  ) +
+  tt_base(bg = PAL$field, ink = PAL$parch, body = PAL$parch, grid = PAL$slate) +
+  theme(
+    panel.grid.major = element_blank(),
+    plot.title    = element_text(size = TT_TYPE[["title"]]),
+    axis.text.y   = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["axis_text"]]),
+    axis.text.x   = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["axis_text"]]),
+    axis.title.x  = element_text(colour = PAL$parch, size = TT_TYPE[["axis_title"]], margin = margin(t = 8)),
+    plot.subtitle = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["subtitle"]], hjust = 0, margin = margin(b = 12)),
+    plot.caption  = element_text(family = TT_MONO, colour = PAL$parch, size = TT_TYPE[["caption"]], hjust = 0, margin = margin(t = 12)),
+    plot.margin   = margin(18, 22, 14, 18)
+  )
+p3
+
+# 内部排版硬闸：只往渲染日志写，不进 HTML（交付产物不得含内部自检信息）
+aud <- bind_rows(tt_audit(p1), tt_audit(p2), tt_audit(p3))
+fam_n  <- n_distinct(c(unname(TT_FAMILY), aud$family[!is.na(aud$family)]))
+size_n <- n_distinct(aud$size[!is.na(aud$size)])
+cat(sprintf("[layout-gate] sizes %d/%d, families %d/%d, out-of-ladder %d\n",
+            size_n, TT_TYPE_MAX, fam_n, TT_FAMILY_MAX, sum(!aud$in_ladder)), file = stderr())
+stopifnot(size_n <= TT_TYPE_MAX, fam_n <= TT_FAMILY_MAX, all(aud$in_ladder))
+```
+
+**读数**：14 个变动最大的词里，只有 `r n_late_side` 个偏向 2016–2019（`r mv_late_txt`），`r n_early_side` 个偏向 2013–2015，最偏的几个是 `r mv_early_txt`。括号里是"早期占比 → 后期占比"与该词的对数几率。注意这与"最常出现的词"是两回事：`r top16$word[1]` 仍然两边都最常见，只是它更偏早期。
+
+## 同一批歌里的第三个变化：署名人数在涨
+
+```{r}
+#| label: tbl-cowriter
+#| echo: false
+t5 <- by_year |> transmute(year = year, songs = songs, mw = sprintf("%.2f", mean_writers),
+                           g4 = sprintf("%.1f%%", share_ge4), mp = sprintf("%.2f", mean_prod))
+names(t5) <- c("入榜年份", "歌曲数", "平均署名作者", "署名 4 位以上的占比", "平均制作人")
+kable(t5, format = "html",
+      caption = "表 5 · 每首歌的署名作者数与制作人数（2013 只有 13 首，读趋势请从 2014 起）")
+```
+
+- `r n_rows` 首歌一共 `r format(n_wtok, big.mark = ",")` 个作者署名（去重后 `r n_wuniq` 位），平均每首 `r sprintf("%.2f", mean_writers)` 位；署名 4 位以上的歌占 `r sprintf("%.1f%%", share_ge4)`。
+- 平均署名人数从 2014 年的 `r sprintf("%.2f", by_year$mean_writers[by_year$year == 2014])` 位涨到 2019 年的 `r sprintf("%.2f", by_year$mean_writers[by_year$year == 2019])` 位；署名 4 位以上的占比同期从 `r sprintf("%.1f%%", by_year$share_ge4[by_year$year == 2014])` 涨到 `r sprintf("%.1f%%", by_year$share_ge4[by_year$year == 2019])`。
+- 独署（只有 1 位作者）的歌 `r n_one_writer` 首：`r paste(n_solo_song, collapse = "；")`。署名最多的是 `r paste(max_writer_song, collapse = "；")`——它采样了别人的作品，所以把原曲作者一并列上。
+- `r sprintf("%.0f%%", share_multi_prod)` 的歌有两位以上制作人；制作人署名比作者署名短得多。
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/country_lyrics.csv`（`r n_rows` × 8）、`data/top_all_writers.csv`（`r n_aw` × 2）、`data/top_primary_writers.csv`（`r n_pw_rows` × 2）、`data/top_producers.csv`（`r n_pp` × 2） |
+| 视觉身份 | 深酒红场 `#7A2E3C`；羊皮纸 `#F0E2CE`（墨、全体作者曲线、后期年代）；黄铜 `#C9A227`（主创作者曲线、早期年代）；石板 `#5A6270`（制作人曲线、基线、网格，不承载文字）；曲线末梢直标、无图例、只留 y = 1 一条基线 |
+| 字体与导出 | 标题与正文 Segoe UI，数字、轴标签与图注 Consolas；图以 `r TT_EXPORT$dpi` dpi 导出，底色与图一致 |
+| 图 1 口径 | `r flow1`；rank 在同池内按计数降序；两条写作者曲线前 `r n_prefix` 名逐位相同，图上画成一条带黄铜芯的线（不是两条重叠线） |
+| 图 2 / 图 3 口径 | 分词前摘掉 `r n_tagged` 首歌里的 `[Verse]/[Chorus]` 段标；去掉 `tidytext::stop_words` 三词典并集、含撇号的缩写与残片（共 `r format(n_apostrophe, big.mark = ",")` 个 token 含撇号）与感叹词（oh、yeah、hey…）；保留 `r format(n_tok, big.mark = ",")` 个 token / `r format(n_vocab, big.mark = ",")` 个词型；丢弃最多的 token 是 `r drop_top_txt` |
+| 词频口径 | 以"歌"为文档单位（同一首歌里重复 20 次的词只算 1 次），避免副歌密度把某个词抬起来；图 2 报占比，图 3 报加一平滑对数几率（支持度 ≥ `r SUPPORT` 首） |
+| 年代划分 | 2013–2015（`r n_early` 首）与 2016–2019（`r n_late` 首），按 `entered_top_30_in` 切 |
+| 不画的东西 | 饼图与双 Y 轴（会把比例与量纲读错）；不把"主创作者"当成第二个人群（它是全量榜的切片）；不按"作者人数"给歌曲排名（采样曲会把原曲作者一并计入）；不引用歌词原文成句 |
+| 未处理的数据异常 | 榜单与歌词重算的 `r n_diff` 处作者计数差额、`r n_miss` 个只在歌词侧出现的名字、制作人榜缺 `r n_pmiss` 位，以及 `r n_feat_rows` 行 featuring（`r n_feat_names` 个不同合作者）一律如实报告，不擅自改数 |
+
+**一句话结论**：乡村热单的写歌池是一条很浅、很长的幂律线（斜率 `r sprintf("%+.2f", fits$slope[fits$series == "all writers"])`），制作人池更陡一点（`r sprintf("%+.2f", fits$slope[fits$series == "producers"])`）；写词的人在变多（平均署名从 `r sprintf("%.2f", by_year$mean_writers[by_year$year == 2014])` 涨到 `r sprintf("%.2f", by_year$mean_writers[by_year$year == 2019])`），而歌词的骨架七年没换，变的是边缘：`r as.character(mv_down$word[1])` 退、`r as.character(mv_up$word[1])` 进。

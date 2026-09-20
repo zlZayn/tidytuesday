@@ -1,0 +1,616 @@
+---
+title: "死海古卷的洞穴档案 探索性可视化"
+subtitle: "TidyTuesday · 2026-09-15 (Week 37)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 洞穴档案：771 份库姆兰手稿
+
+> 本周视觉身份（六周互不相同，不写入共享 theme）：**石绿灰场 `#C7CFC9`＋浅色卡面 `#F4F6F4`**（panel 用卡面、底色露在四周，非平涂）＋ 石墨 `#232B33` / 陶土红 `#A34B32` / 苔绿 `#4F6B4A`；图表家族 = **点阵矩阵（点面积 = 手稿数，行末带合计条）＋ 百分比堆叠横条 ＋ 冲积流向**；版式签名 = **方格矩阵 ＋ 每行末合计条 ＋ 图例内嵌成一行文字而不是图例框**。字号走六周共享的排版阶梯（16 / 13 / 11 / 9.5 / 8.5 / 7.5 pt），字体两族：标题一族 Segoe UI、数据与轴一族 Consolas。
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(ggplot2)
+  library(ggalluvial)
+  library(knitr)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+# ---- 本周色彩（只在本周生效；共享 theme 不含任何色值）----
+PAL <- list(
+  bg     = "#C7CFC9",   # 石绿灰：露在卡面四周的底色
+  card   = "#F4F6F4",   # 浅色卡面：panel 底
+  ink    = "#232B33",   # 石墨
+  clay   = "#A34B32",   # 陶土红
+  moss   = "#4F6B4A",   # 苔绿
+  grid   = "#DCE2DC",   # 卡面上的方格线
+  rule   = "#B4BFB8",   # 矩阵内的分隔实线
+  stone  = "#9AA5A0"    # 中性灰：残差类
+)
+BODY <- "#4E5A55"       # 正文灰绿：副标题 / 脚注 / 轴标题
+
+# 类别色：在石绿 / 陶土 / 石墨三色家族内派生，6 类正好凑齐一张图例
+CAT6_COL <- c(
+  "Biblical"             = "#A34B32",
+  "Parabiblical"         = "#C98A6B",
+  "Sectarian"            = "#4F6B4A",
+  "Liturgical"           = "#8AA37F",
+  "Wisdom Literature"    = "#232B33",
+  "Other / Unidentified" = "#9AA5A0"
+)
+# 段内标签用色：浅底配石墨、深底配卡面（否则数字看不见）
+CAT6_LABCOL <- c(
+  "Biblical"             = "#F4F6F4",
+  "Parabiblical"         = "#232B33",
+  "Sectarian"            = "#F4F6F4",
+  "Liturgical"           = "#232B33",
+  "Wisdom Literature"    = "#F4F6F4",
+  "Other / Unidentified" = "#232B33"
+)
+
+# 字号：一律引用共享阶梯 TT_TYPE（title 16 / subtitle 13 / axis_title 11 /
+# axis_text 9.5 / annot 8.5 / caption 7.5），本周不新增任何字号。
+mm <- function(pt) pt / .pt          # element_text 用 pt，geom_text 用 mm
+dup_family <- function() TT_FAMILY[["data"]]
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi,
+                      dev.args = list(bg = PAL$bg))
+
+raw <- read_csv("../data/dead_sea_scrolls.csv", show_col_types = FALSE)
+```
+
+## 洞穴编号只对库姆兰成立
+
+```{r}
+#| label: cave-semantics
+#| echo: false
+# cave 的适用范围：只在 site_parent == "Qumran" 时有值，其余遗址为空
+n_raw   <- nrow(raw)
+n_field <- ncol(raw)
+stopifnot(n_distinct(raw$manuscript_id) == n_raw)          # 一行一件藏品
+stopifnot(identical(is.na(raw$cave), raw$site_parent != "Qumran"))
+
+qumran <- filter(raw, site_parent == "Qumran")
+digit  <- suppressWarnings(as.numeric(str_extract(qumran$site, "[0-9]+")))
+n_digit_mismatch <- sum(is.na(digit) | digit != qumran$cave)
+
+cave_by_parent <- raw |>
+  summarise(n_all = n(), has_cave = sum(!is.na(cave)), na_cave = sum(is.na(cave)),
+            .by = site_parent) |>
+  arrange(desc(has_cave))
+
+n_out       <- sum(raw$site_parent != "Qumran")
+n_qumran    <- nrow(qumran)
+cave_used   <- sort(unique(qumran$cave))
+cave_absent <- setdiff(1:11, cave_used)
+```
+
+`dead_sea_scrolls.csv` 是 `r n_raw` 行 × `r n_field` 列，`manuscript_id` 无重复。**`cave` 不是全局唯一的洞穴编号**：只有 `site_parent = Qumran` 的 `r n_qumran` 行带洞穴号，其余 `r n_out` 行（Masada `r cave_by_parent$na_cave[cave_by_parent$site_parent == "Masada"]`、Nahal Hever `r cave_by_parent$na_cave[cave_by_parent$site_parent == "Nahal Hever"]`、Wadi Murabba'at `r cave_by_parent$na_cave[cave_by_parent$site_parent == "Wadi Murabba'at"]`）的 cave 全部为空。Masada 的编号与库姆兰的洞穴号不同源，混进一张矩阵就是口径错误，所以本页三张图统一只用库姆兰子集。
+
+另一条可核对的一致性：`site` 字符串（`Qumran, Cave 4` 这类）里的数字与 `cave` 列**逐行一致，不一致 `r n_digit_mismatch` 行**——所以 cave 不是随手填的标签，可以当编号用。库姆兰实际用到 `r length(cave_used)` 个洞穴：`r paste(cave_used, collapse = "、")`；`r paste(cave_absent, collapse = "、")` 号洞在数据里不存在（不是缺测，是这批藏品里没有）。
+
+```{r}
+#| label: tbl-cave-scope
+#| echo: false
+cave_by_parent |>
+  transmute(site_parent, `cave 有编号` = has_cave, `cave 为 NA` = na_cave, 合计 = n_all) |>
+  kable(format = "html", caption = "cave 列的适用范围：只有库姆兰的藏品带洞穴编号")
+```
+
+## 入图样本：口径链与三处再编码
+
+```{r}
+#| label: prep
+#| echo: false
+phase_levels  <- c("Early Hellenistic", "Hasmonean", "Herodian", "Roman",
+                   "Hellenistic-Roman", "Phase not recorded")
+cat6_levels   <- c("Biblical", "Parabiblical", "Sectarian", "Liturgical",
+                   "Wisdom Literature", "Other / Unidentified")
+medium_levels <- c("Parchment", "Papyrus", "Copper", "Stone", "Medium not recorded")
+
+# period 的 7 种取值里，Hasmonean 与 Hasmonean (period) 是同一期
+n_period_vals <- n_distinct(raw$period)
+n_period_dup  <- sum(raw$period == "Hasmonean (period)", na.rm = TRUE)
+n_period_na   <- sum(is.na(raw$period))
+
+qm <- qumran |>
+  mutate(
+    phase = case_when(
+      period == "Early Hellenistic"                     ~ "Early Hellenistic",
+      period %in% c("Hasmonean", "Hasmonean (period)")   ~ "Hasmonean",
+      period == "Herodian"                              ~ "Herodian",
+      period == "Roman"                                 ~ "Roman",
+      period == "Hellenistic-Roman"                     ~ "Hellenistic-Roman",
+      TRUE                                              ~ "Phase not recorded"),
+    cat6 = case_when(
+      content_category %in% c("Biblical", "Biblical (Deuterocanonical)",
+                              "Biblical Translation")    ~ "Biblical",
+      content_category == "Parabiblical"                 ~ "Parabiblical",
+      content_category == "Sectarian"                    ~ "Sectarian",
+      content_category == "Liturgical"                   ~ "Liturgical",
+      content_category == "Wisdom Literature"            ~ "Wisdom Literature",
+      TRUE                                               ~ "Other / Unidentified"),
+    medium = if_else(is.na(material), "Medium not recorded", material)
+  )
+
+stopifnot(nrow(qm) == n_qumran)
+stopifnot(sum(is.na(qm$phase)) == 0, sum(is.na(qm$cat6)) == 0)
+stopifnot(n_distinct(qm$cat6) == length(cat6_levels))
+stopifnot(n_distinct(qm$phase) == length(phase_levels))
+n_unresolved <- sum(qm$phase %in% c("Hellenistic-Roman", "Phase not recorded"))
+n_phase_na   <- sum(qm$phase == "Phase not recorded")
+
+# ---- 类别标签（含 n）在图 2、图 3 共用；颜色与标签按同一顺序绑定 ----
+cat6_n   <- qm |> count(cat6) |> arrange(match(cat6, cat6_levels))
+stopifnot(identical(cat6_n$cat6, names(CAT6_COL)), identical(cat6_n$cat6, names(CAT6_LABCOL)))
+cat6_lab <- sprintf("%s (n = %d)", cat6_n$cat6, cat6_n$n)
+names(CAT6_COL)    <- cat6_lab
+names(CAT6_LABCOL) <- cat6_lab
+cat6_map <- setNames(cat6_lab, cat6_n$cat6)
+as_cat6l <- function(x) factor(unname(cat6_map[as.character(x)]), levels = cat6_lab)
+
+# ---- 图 1 用：洞穴 × 阶段矩阵 ----
+cave_order <- qm |> count(cave, sort = TRUE) |> pull(cave)
+cave_n     <- qm |> count(cave) |> arrange(match(cave, cave_order))
+cave_lab   <- sprintf("Cave %d (n = %d)", cave_n$cave, cave_n$n)
+
+mat <- qm |>
+  count(cave, phase) |>
+  complete(cave = cave_order, phase = phase_levels, fill = list(n = 0)) |>
+  mutate(cave = factor(cave, levels = cave_order),
+         phase = factor(phase, levels = phase_levels))
+
+mat_wide <- mat |> pivot_wider(names_from = phase, values_from = n)
+col_tot  <- mat |> summarise(n = sum(n), .by = phase) |> arrange(match(phase, phase_levels))
+top_cell <- mat |> slice_max(n, n = 1, with_ties = FALSE)
+
+# ---- 图 2 用：洞穴 × 类别构成 ----
+img_cave <- qm |>
+  summarise(sum_img = sum(num_images), med_img = median(num_images),
+            zero_img = sum(num_images == 0), .by = cave) |>
+  arrange(match(cave, cave_order))
+
+comp <- qm |>
+  count(cave, cat6) |>
+  complete(cave = cave_order, cat6 = cat6_levels, fill = list(n = 0)) |>
+  left_join(img_cave |> select(cave, med_img), by = "cave") |>
+  arrange(cave, cat6) |>
+  mutate(share = 100 * n / sum(n), .by = cave) |>
+  mutate(cave = factor(cave, levels = cave_order),
+         cat6 = factor(cat6, levels = cat6_levels),
+         cat6l = as_cat6l(cat6))
+
+# 每洞的主导类别 + 图像中位数（按洞取最大）
+dom <- comp |>
+  slice_max(n, n = 1, with_ties = FALSE, by = cave) |>
+  transmute(cave, cat6, dom_lab = sprintf("%s · med %d", cat6, med_img))
+dom_n <- dom |> count(cat6, name = "caves") |> arrange(desc(caves))
+n_lead <- function(cc) sum(dom_n$caves[dom_n$cat6 == cc])
+cap_composition <- sprintf(
+  "Composition by cave: %s. Every cave is stacked to 100 percent, so bar length never encodes archive size.",
+  paste(sprintf("%s leads %d", dom_n$cat6, dom_n$caves), collapse = "; "))
+
+# ---- 图 3 用：阶段 → 材质 → 类别 ----
+allu <- qm |>
+  mutate(phase  = factor(phase, levels = phase_levels),
+         medium = factor(medium, levels = medium_levels),
+         cat6   = factor(cat6, levels = cat6_levels),
+         cat6l  = as_cat6l(cat6))
+
+# ---- 正文要引用的数字，全部与图同源 ----
+medium_n    <- qm |> count(medium) |> arrange(match(medium, medium_levels))
+n_zero_q    <- sum(qm$num_images == 0)
+n_zero_all  <- sum(raw$num_images == 0)
+img_total   <- sum(qm$num_images)
+img_c4      <- img_cave$sum_img[img_cave$cave == 4]
+c4_n        <- cave_n$n[cave_n$cave == 4]
+c4_share    <- 100 * c4_n / n_qumran
+c4_img_share <- 100 * img_c4 / img_total
+herod_n     <- col_tot$n[col_tot$phase == "Herodian"]
+med_c4      <- img_cave$med_img[img_cave$cave == 4]
+med_c11     <- img_cave$med_img[img_cave$cave == 11]
+med_c5      <- img_cave$med_img[img_cave$cave == 5]
+top_id      <- raw$manuscript_id[which.max(raw$num_images)]
+top_img     <- max(raw$num_images)
+top_cat     <- raw$content_category[which.max(raw$num_images)]
+zero_id     <- qm$manuscript_id[qm$num_images == 0]
+copper_id   <- qm$manuscript_id[which(qm$material == "Copper")]
+void_id     <- raw$manuscript_id[is.na(raw$material)]
+
+# 阶段 × 类别：36 格里有多少空
+pc_cells      <- qm |> count(phase, cat6) |>
+  complete(phase = phase_levels, cat6 = cat6_levels, fill = list(n = 0))
+n_cells       <- nrow(pc_cells)
+n_zero_cells  <- sum(pc_cells$n == 0)
+partial3      <- c("Early Hellenistic", "Roman", "Phase not recorded")
+n_small3      <- sum(pc_cells$n[pc_cells$phase %in% partial3])
+n_zero_small3 <- sum(pc_cells$n == 0 & pc_cells$phase %in% partial3)
+hero_min      <- min(pc_cells$n[pc_cells$phase == "Herodian"])
+hero_top      <- pc_cells |> filter(phase == "Herodian") |> slice_max(n, n = 2)
+n_parch_grp   <- sum(qm |> filter(medium == "Parchment") |> count(cat6) |> pull(n) > 0)
+```
+
+本周的口径链只有一行，正文与三张图的图注共用它：
+
+```{r}
+#| label: flow-line
+#| echo: false
+flow_txt <- tt_flow(n_raw, n_qumran,
+  sprintf("%d 份 Masada / Nahal Hever / Wadi Murabba'at 藏品没有库姆兰洞穴编号", n_out))
+```
+
+> `r flow_txt`
+
+**剔除原因只有一个**：非库姆兰藏品在 `cave` 上是 NA（上文已断言），不是随机缺失，也不是把 `num_images = 0` 当缺失。入图的 `r n_qumran` 份手稿里 `num_images` 一个 NA 都没有，其中 `r n_zero_q` 份是**有记录但为 0 张图**——0 是观测值，本页不剔除也不填补（全表 0 张图共 `r n_zero_all` 份，另 `r n_zero_all - n_zero_q` 份在 Masada）。
+
+三处再编码写在这里，正文与图注口径一致：
+
+| 列 | 原始 | 处理 | 影响 |
+| --- | --- | --- | --- |
+| `period` | `r n_period_vals` 种取值 | `Hasmonean (period)` 并入 `Hasmonean`（`r n_period_dup` 行）；`NA` 单独成列 `Phase not recorded` | `r n_period_vals` 种取值收成 `r length(phase_levels)` 列，只合并拼写，不改语义 |
+| `content_category` | 10 类 | `Biblical` / `Biblical (Deuterocanonical)` / `Biblical Translation` 并为 `Biblical`；`Documentary` 与 `Unidentified` 并入 `Other / Unidentified` | 10 类收成 6 组（正好一张图例放得下），其余 5 类原样保留 |
+| `material` | 4 种 + `NA` | `NA` 记为 `Medium not recorded`（`r sum(is.na(qm$material))` 行），不并入任何材质 | 图 3 材质轴有 5 个分层，末层是记录缺失而非材质名 |
+
+## 图 1｜洞穴 × 阶段：一个洞吃掉七成档案
+
+```{r}
+#| label: fig-matrix
+#| echo: false
+#| fig-cap: "Cave 4 holds seven manuscripts in ten; the Herodian phase alone accounts for nearly half of the Qumran archive."
+#| fig-width: 10.4
+#| fig-height: 6.9
+xpos  <- c("Early Hellenistic" = 1, "Hasmonean" = 2, "Herodian" = 3, "Roman" = 4,
+           "Hellenistic-Roman" = 5.7, "Phase not recorded" = 6.9)
+yrow  <- setNames(11.6 - seq_along(cave_order), as.character(cave_order))
+bar_x0    <- 8.4
+bar_scale <- 4.4 / max(cave_n$n)
+
+matp <- mat |>
+  mutate(x = unname(xpos[as.character(phase)]), y = unname(yrow[as.character(cave)])) |>
+  left_join(cave_n |> transmute(cave = factor(cave, levels = cave_order), total = n),
+            by = "cave")
+mat_lab <- matp |> filter(n >= 30)
+
+p1 <- ggplot(matp) +
+  geom_tile(aes(x, y), width = 1, height = 1, fill = NA,
+            colour = PAL$grid, linewidth = 0.34) +
+  geom_vline(xintercept = 5.3, colour = PAL$rule, linewidth = 0.4) +
+  geom_vline(xintercept = 7.8, colour = PAL$rule, linewidth = 0.4) +
+  geom_hline(yintercept = 0.95, colour = PAL$rule, linewidth = 0.4) +
+  geom_point(aes(x, y, size = n), colour = PAL$ink, alpha = 0.94, stroke = 0) +
+  geom_text(aes(x, y, label = n), data = mat_lab,
+            colour = PAL$card, family = TT_FAMILY[["data"]], size = mm(TT_TYPE[["annot"]])) +
+  geom_rect(aes(xmin = bar_x0, xmax = bar_x0 + pmax(total * bar_scale, 0.055),
+                ymin = y - 0.24, ymax = y + 0.24),
+            fill = PAL$clay, colour = NA) +
+  geom_text(aes(x = bar_x0 + pmax(total * bar_scale, 0.055) + 0.16, y = y, label = total),
+            hjust = 0, family = TT_FAMILY[["data"]], size = mm(TT_TYPE[["annot"]]),
+            colour = PAL$ink) +
+  geom_text(aes(x, y = 0.42, label = n),
+            data = col_tot |> mutate(x = unname(xpos[as.character(phase)])),
+            family = TT_FAMILY[["data"]], size = mm(TT_TYPE[["annot"]]), colour = PAL$clay) +
+  geom_text(aes(x = 10.6, y = 0.42, label = sum(col_tot$n)),
+            family = TT_FAMILY[["data"]], size = mm(TT_TYPE[["annot"]]),
+            colour = PAL$clay, fontface = "bold") +
+  scale_size_area(max_size = 16, guide = "none") +
+  scale_x_continuous(breaks = c(unname(xpos), 10.6),
+                     labels = c(names(xpos), "All manuscripts"),
+                     limits = c(0.3, 14.1)) +
+  scale_y_continuous(breaks = yrow, labels = cave_lab, limits = c(0, 11.7)) +
+  labs(
+    title    = "One cave holds seven manuscripts in ten",
+    subtitle = tt_strip("QUMRAN CAVES", sprintf("%d MANUSCRIPTS", n_qumran),
+                        "DOT AREA = COUNT", sprintf("MAX DOT %d", top_cell$n)),
+    x = NULL, y = NULL,
+    caption  = tt_source("dead_sea_scrolls.csv", n_qumran,
+      sprintf(paste0("dot area = manuscripts per cave-phase cell, row bar = that cave's total; ",
+                     "the last two columns are the unresolved groups (Hellenistic-Roman is a ",
+                     "bracketing label, not one phase; %d rows have no period at all). ",
+                     "Hasmonean (period) merged into Hasmonean. Column totals %s sum to %d, ",
+                     "i.e. the %d plotted of %d rows."),
+              n_phase_na, paste(col_tot$n, collapse = " + "),
+              sum(col_tot$n), n_qumran, n_raw))
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = BODY, grid = PAL$grid) +
+  theme(
+    panel.background = element_rect(fill = PAL$card, colour = NA),
+    panel.grid       = element_blank(),
+    plot.subtitle    = element_text(family = TT_FAMILY[["data"]], colour = BODY,
+                                    size = TT_TYPE[["subtitle"]], hjust = 0,
+                                    margin = margin(b = 10)),
+    plot.caption     = element_text(family = TT_FAMILY[["data"]], colour = BODY,
+                                    size = TT_TYPE[["caption"]], hjust = 0,
+                                    margin = margin(t = 10), lineheight = 1.35),
+    axis.text.x      = element_text(family = TT_FAMILY[["data"]], colour = PAL$ink,
+                                    size = TT_TYPE[["axis_text"]], angle = 30, hjust = 1),
+    axis.text.y      = element_text(family = TT_FAMILY[["data"]], colour = PAL$ink,
+                                    size = TT_TYPE[["axis_text"]]),
+    plot.margin      = margin(16, 24, 12, 16)
+  )
+p1
+```
+
+**读数**：`r n_qumran` 份手稿里 `r c4_n` 份在 4 号洞（`r sprintf("%.1f", c4_share)`%），`r herod_n` 份属希律时期（`r sprintf("%.1f", 100 * herod_n / n_qumran)`%）；矩阵里最大的一格是 **`r as.character(top_cell$phase)` 期的 Cave `r as.character(top_cell$cave)`，`r top_cell$n` 份**。
+
+轴上要留一个口径余地：`Hellenistic-Roman` 是**跨希腊化到罗马的括注标签**，不指向某一期，因此它与 `Early Hellenistic`/`Hasmonean`/`Herodian`/`Roman` 四列**不是互斥时间轴**（`r n_unresolved` 行落在两个未解析分组里，其中 `r n_phase_na` 行根本没有 `period`）。所以我不按列讲"时期趋势"，只讲同一行内的分布。
+
+```{r}
+#| label: tbl-matrix
+#| echo: false
+mt <- mat_wide |>
+  select(cave, all_of(phase_levels)) |>
+  mutate(All = rowSums(across(where(is.numeric)))) |>
+  arrange(cave)
+mt |>
+  transmute(`洞穴` = sprintf("Cave %d", as.integer(as.character(cave))),
+            across(where(is.numeric))) |>
+  bind_rows(
+    summarise(mt, across(where(is.numeric), sum)) |>
+      mutate(`洞穴` = "合计", .before = 1)
+  ) |>
+  kable(format = "html",
+        caption = "图 1 的原始数字（与图上同一份聚合；行序、列序与图一致，末行末列可互相验算）")
+```
+
+## 图 2｜每洞的类别构成：量大的洞不是专一的洞
+
+```{r}
+#| label: fig-composition
+#| echo: false
+#| fig-cap: !expr cap_composition
+#| fig-width: 11
+#| fig-height: 6.4
+comp_lab <- comp |> filter(share >= 18)
+
+p2 <- ggplot(comp, aes(x = share, y = cave, fill = cat6l)) +
+  geom_col(width = 0.62, position = position_stack(reverse = TRUE)) +
+  geom_text(aes(label = sprintf("%.0f", share)), data = comp_lab,
+            position = position_stack(vjust = 0.5, reverse = TRUE),
+            colour = unname(CAT6_LABCOL[as.character(comp_lab$cat6l)]),
+            family = TT_FAMILY[["data"]], size = mm(TT_TYPE[["annot"]])) +
+  geom_text(aes(x = 101.6, y = cave, label = dom_lab),
+            data = dom |> mutate(cave = factor(cave, levels = cave_order)),
+            inherit.aes = FALSE, hjust = 0, size = mm(TT_TYPE[["annot"]]),
+            family = TT_FAMILY[["text"]], colour = PAL$ink) +
+  scale_fill_manual(values = CAT6_COL, breaks = cat6_lab) +
+  scale_x_continuous(breaks = c(0, 25, 50, 75, 100),
+                     expand = expansion(mult = c(0.012, 0))) +
+  scale_y_discrete(limits = rev(levels(comp$cave)), labels = rev(cave_lab)) +
+  coord_cartesian(xlim = c(0, 100), clip = "off") +
+  labs(
+    title    = "What each cave actually stores",
+    subtitle = tt_strip("SHARE PER CAVE", "100% STACKED",
+                        sprintf("%d CAVES", length(cave_order)),
+                        sprintf("%d MANUSCRIPTS", n_qumran)),
+    x = "share of manuscripts in the cave (%)", y = NULL,
+    caption  = tt_source("dead_sea_scrolls.csv", n_qumran,
+      paste0("segments = six declared content groups (10 raw categories: Deuterocanonical and ",
+             "Biblical Translation folded into Biblical, Documentary and Unidentified into ",
+             "Other / Unidentified); the right margin names each cave's top group and the ",
+             "median images per manuscript (med). Bar length says nothing about archive size ",
+             "-- figure 1 carries that. Segment numbers are percent of the cave, printed only ",
+             "where the segment reaches 18 percent. Same ", n_qumran, " of ", n_raw,
+             " rows as figure 1."))
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = BODY, grid = PAL$grid) +
+  theme(
+    panel.background   = element_rect(fill = PAL$card, colour = NA),
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_line(colour = PAL$grid, linewidth = 0.35),
+    plot.subtitle      = element_text(family = TT_FAMILY[["data"]], colour = BODY,
+                                      size = TT_TYPE[["subtitle"]], hjust = 0,
+                                      margin = margin(b = 10)),
+    plot.caption       = element_text(family = TT_FAMILY[["data"]], colour = BODY,
+                                      size = TT_TYPE[["caption"]], hjust = 0,
+                                      margin = margin(t = 10), lineheight = 1.35),
+    axis.text.y        = element_text(family = TT_FAMILY[["data"]], colour = PAL$ink,
+                                      size = TT_TYPE[["axis_text"]]),
+    axis.text.x        = element_text(family = TT_FAMILY[["data"]], colour = PAL$ink,
+                                      size = TT_TYPE[["axis_text"]]),
+    legend.position    = "top",
+    legend.key.spacing.x = unit(5, "pt"),
+    legend.margin      = margin(b = 2),
+    plot.margin        = margin(16, 150, 12, 16)
+  ) +
+  guides(fill = guide_legend(nrow = 1, byrow = TRUE))
+p2
+```
+
+**读数**：残差组 `Other / Unidentified` 在 `r n_lead("Other / Unidentified")` 个洞里居首，`Biblical` 在 `r n_lead("Biblical")` 个洞里居首，`Liturgical` 只在 `r n_lead("Liturgical")` 个洞（8 号洞）居首（`Liturgical` `r comp$n[comp$cave == 8 & comp$cat6 == "Liturgical"]` 份 vs `Biblical` `r comp$n[comp$cave == 8 & comp$cat6 == "Biblical"]` 份，而这个洞只有 `r cave_n$n[cave_n$cave == 8]` 份手稿，一句话就得小心）。**量最大的洞不等于最专一的洞**：Cave 4 装 `r c4_n` 份手稿，构成是 `r sprintf("%.0f", comp$share[comp$cave == 4 & comp$cat6 == "Other / Unidentified"])`% 残差 + `r sprintf("%.0f", comp$share[comp$cave == 4 & comp$cat6 == "Biblical"])`% 圣经文本 + `r sprintf("%.0f", comp$share[comp$cave == 4 & comp$cat6 == "Sectarian"])`% 教派文献；而 11 号洞（`r cave_n$n[cave_n$cave == 11]` 份）的圣经文本占 `r sprintf("%.0f", comp$share[comp$cave == 11 & comp$cat6 == "Biblical"])`%，比 Cave 4 高。
+
+**图像数也不听体积的**：Cave 4 每份手稿的图像中位数 `r med_c4` 张，11 号洞 `r med_c11` 张、5 号洞 `r med_c5` 张；`r sprintf("%.1f", c4_img_share)`% 的图像总量确实压在 Cave 4，但那是总量（`r format(img_c4, big.mark = ",")` 张），不是每份手稿的强度。
+
+```{r}
+#| label: tbl-composition
+#| echo: false
+comp |>
+  select(cave, cat6, n) |>
+  pivot_wider(names_from = cat6, values_from = n, values_fill = 0) |>
+  select(cave, all_of(cat6_levels)) |>
+  arrange(cave) |>
+  mutate(`洞穴` = sprintf("Cave %d", as.integer(as.character(cave))),
+         `合计` = rowSums(across(all_of(cat6_levels))),
+         `中位图像数` = img_cave$med_img[match(as.integer(as.character(cave)), img_cave$cave)]) |>
+  select(`洞穴`, all_of(cat6_levels), `合计`, `中位图像数`) |>
+  kable(format = "html",
+        caption = "图 2 的原始数字（列序与图上堆叠顺序一致，可与堆叠条逐段对账）")
+```
+
+## 图 3｜阶段 → 材质 → 类别：材质这一层几乎不筛内容
+
+```{r}
+#| label: fig-alluvial
+#| echo: false
+#| fig-cap: "Parchment carries 87 percent of the archive and feeds all six content groups, so medium does not sort content."
+#| fig-width: 10.4
+#| fig-height: 7.2
+#| fig-dpi: 160
+# 逐块降像素密度：半透明冲积色带叠色后熵高，这一张单独走 fig-dpi 160
+# （Quarto retina 2 → 实际 320 dpi），其余两图沿用 TT_EXPORT$dpi。
+# 用 geom_alluvium()：三轴一次贯通的冲积色带（geom_flow() 在本机
+# ggplot2 4.0.3 下画不出色带）。
+spread_y <- function(y, ymin, ymax, gap) {
+  o <- order(y); yy <- y[o]
+  for (i in seq_along(yy)[-1]) if (yy[i] - yy[i - 1] < gap) yy[i] <- yy[i - 1] + gap
+  hi <- max(ymax) - gap; lo <- min(ymin) + gap
+  if (yy[length(yy)] > hi) yy <- yy - (yy[length(yy)] - hi)
+  if (yy[1] < lo) yy <- yy + (lo - yy[1])
+  out <- numeric(length(y)); out[o] <- yy; out
+}
+
+p3 <- ggplot(allu, aes(axis1 = phase, axis2 = medium, axis3 = cat6)) +
+  geom_alluvium(aes(fill = cat6l), width = 0.26, alpha = 0.55, colour = NA, knot.pos = 0.35) +
+  geom_stratum(width = 0.3, fill = PAL$card, colour = PAL$ink, linewidth = 0.3) +
+  scale_fill_manual(values = CAT6_COL, breaks = cat6_lab) +
+  scale_x_discrete(limits = c("phase", "medium", "cat6"),
+                   labels = c("Phase (period)", "Medium (material)", "Content group"),
+                   expand = expansion(add = 0.82)) +
+  scale_y_continuous(expand = c(0.005, 0.005)) +
+  labs(
+    title    = "Medium does not sort content",
+    subtitle = tt_strip("RIBBON FILL = CONTENT GROUP", sprintf("%d MANUSCRIPTS", n_qumran),
+                        sprintf("PARCHMENT %d", medium_n$n[medium_n$medium == "Parchment"]),
+                        "LABEL = LEVEL (n)"),
+    x = NULL, y = NULL,
+    caption  = tt_source("dead_sea_scrolls.csv", n_qumran,
+      sprintf(paste0("ribbon width = manuscripts flowing through phase, medium and content ",
+                     "group; strata are card-coloured boxes and the ribbons carry the content ",
+                     "colour. The medium axis is dominated by parchment (%d of %d), so its ",
+                     "three one-object strata (Copper %s, Stone, medium unrecorded) are pulled ",
+                     "out with leader lines. Same %d of %d rows as figures 1-2."),
+              medium_n$n[medium_n$medium == "Parchment"], n_qumran, copper_id,
+              n_qumran, n_raw))
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = BODY, grid = PAL$grid) +
+  theme(
+    panel.background = element_rect(fill = PAL$card, colour = NA),
+    panel.grid       = element_blank(),
+    plot.subtitle    = element_text(family = TT_FAMILY[["data"]], colour = BODY,
+                                    size = TT_TYPE[["subtitle"]], hjust = 0,
+                                    margin = margin(b = 10)),
+    plot.caption     = element_text(family = TT_FAMILY[["data"]], colour = BODY,
+                                    size = TT_TYPE[["caption"]], hjust = 0,
+                                    margin = margin(t = 10), lineheight = 1.35),
+    axis.text.x      = element_text(family = TT_FAMILY[["text"]], colour = PAL$ink,
+                                    size = TT_TYPE[["axis_title"]], face = "bold"),
+    axis.text.y      = element_blank(),
+    legend.key.spacing.x = unit(5, "pt"),
+    plot.margin      = margin(16, 20, 12, 16)
+  ) +
+  guides(fill = guide_legend(nrow = 1, byrow = TRUE))
+
+# 分层标签自绘：锚点取自分层位置，小分层用引线拉开
+st <- ggplot_build(p3)$data[[2]] |>
+  select(x, y, ymin, ymax, stratum, count) |>
+  mutate(s        = if_else(x == 1, -1, 1),
+         lab_y    = spread_y(y, ymin, ymax, gap = 0.045 * max(ymax)),
+         lab_x    = x + s * 0.17,
+         seg_x    = x + s * 0.16,
+         seg_xend = lab_x - s * 0.02,
+         hj       = if_else(x == 1, 1, 0),
+         lab      = sprintf("%s (%d)", stratum, count))
+
+p3 <- p3 +
+  geom_segment(data = st, aes(x = seg_x, xend = seg_xend, y = lab_y, yend = y),
+               inherit.aes = FALSE, colour = PAL$rule, linewidth = 0.3, lineend = "round") +
+  geom_text(data = st, aes(x = lab_x, y = lab_y, label = lab, hjust = hj),
+            inherit.aes = FALSE, size = mm(TT_TYPE[["annot"]]),
+            family = TT_FAMILY[["text"]], colour = PAL$ink)
+
+# 排版硬闸：放进本图块内（同属 echo: false），结果只进渲染日志，不进报告。
+audit <- bind_rows(
+  tt_audit(p1) |> mutate(图 = "图 1", .before = 1),
+  tt_audit(p2) |> mutate(图 = "图 2", .before = 1),
+  tt_audit(p3) |> mutate(图 = "图 3", .before = 1)
+) |>
+  bind_rows(tibble(图 = "图 1/2/3", element = "geom_text 图内数值与标签",
+                   size = TT_TYPE[["annot"]], family = TT_FAMILY[["data"]],
+                   in_ladder = TRUE))
+n_size_used <- n_distinct(audit$size[!is.na(audit$size)])
+n_family    <- n_distinct(audit$family[!is.na(audit$family)])
+n_off       <- sum(!audit$in_ladder)
+stopifnot(n_size_used <= TT_TYPE_MAX, n_family <= TT_FAMILY_MAX, n_off == 0)
+cat(sprintf("typo-audit: sizes %d/%d, families %d/%d, off-ladder %d
+",
+            n_size_used, TT_TYPE_MAX, n_family, TT_FAMILY_MAX, n_off), file = stderr())
+p3
+```
+
+**读数**：`r medium_n$n[medium_n$medium == "Parchment"]` 份是羊皮纸、`r medium_n$n[medium_n$medium == "Papyrus"]` 份是纸草，其余三种材质各 1 份（铜、石、材质字段为空）；羊皮纸这一种材质就覆盖了全部 `r n_parch_grp` 个内容组，所以材质这一层筛不出内容。真正有落差的是阶段：`r n_cells` 个 阶段 × 类别 格子里有 `r n_zero_cells` 个是 0，而且**全部**落在 `Early Hellenistic` / `Roman` / `Phase not recorded` 三行（三行合计 `r n_small3` 份，占 `r sprintf("%.1f", 100 * n_small3 / n_qumran)`%）——这三行读不出类别偏好；反过来 `Herodian` 一行 6 格最少也有 `r hero_min` 份（最大 `r hero_top$n[1]` 份，`r as.character(hero_top$cat6[1])`）。**结论是负面的但有用**：在这份数据里，材质与阶段都不能预测内容类别，能预测内容类别的是洞穴（图 1、图 2）。
+
+## 数据异常（记录，不改数据）
+
+| 现象 | 原始数字 | 处理 |
+| --- | --- | --- |
+| `Hasmonean (period)` 与 `Hasmonean` 并列 | `r n_period_dup` 行（`r qm$manuscript_id[which(qm$period == "Hasmonean (period)")]`） | 图上并入 `Hasmonean`，正文与图注写明 |
+| `Hellenistic-Roman` 是跨期括注 | `r col_tot$n[col_tot$phase == "Hellenistic-Roman"]` 行 | 独立成列并加分隔线，不参与时间趋势叙述 |
+| `period` 为空 | `r n_period_na` 行（其中库姆兰 `r n_phase_na` 行） | 单独一列 `Phase not recorded`，不当缺失剔除 |
+| `material` 为空 | `r sum(is.na(raw$material))` 行（`r void_id`） | 图 3 记为 `Medium not recorded` |
+| `num_images = 0` | 库姆兰 `r n_zero_q` 份（`r paste(zero_id, collapse = "、")`）+ Masada `r n_zero_all - n_zero_q` 份 | 当观测值保留；铜卷 `r copper_id` 是唯一 0 张图的非纸草藏品 |
+| `num_images` 极端值 | 最大 `r top_img` 张（`r top_id`，`r top_cat`）；全表中位数 `r median(raw$num_images)` 张 | 不剔除、不截断；图 2 用中位数而非均值 |
+| 洞穴编号不连续 | 用到 `r paste(cave_used, collapse = "、")`，缺 `r paste(cave_absent, collapse = "、")` | 不补齐空行，矩阵只画实际存在的洞 |
+
+非库姆兰的 `r n_out` 份藏品没有进入任何一张图，这里补一张表交代它们是什么：
+
+```{r}
+#| label: tbl-outside
+#| echo: false
+raw |>
+  filter(site_parent != "Qumran") |>
+  summarise(藏品数 = n(), 图像总数 = sum(num_images), 图像中位数 = median(num_images),
+            .by = c(site_parent, site)) |>
+  arrange(desc(藏品数)) |>
+  kable(format = "html", caption = "未入图的 38 份藏品：分布在 3 个遗址群，cave 全部为 NA")
+```
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/dead_sea_scrolls.csv`（`r n_raw` × `r n_field`，`manuscript_id` 唯一） |
+| 入图样本 | `r flow_txt` |
+| 三图共用 | 同一批 `r n_qumran` 份手稿、同一套 6 组类别与颜色、同一套洞穴顺序（按手稿数降序） |
+| `cave` 口径 | 仅在 `site_parent == "Qumran"` 时存在；与 `site` 字符串中的编号逐行一致（不一致 `r n_digit_mismatch` 行） |
+| `period` 口径 | `r n_period_vals` 种取值 → `r length(phase_levels)` 列（`Hasmonean (period)` 并入 `Hasmonean`，`NA` 单独成列）；`Hellenistic-Roman` 为跨期标签，与前四列不互斥 |
+| `content_category` 口径 | 10 类 → 6 组；三张图共用同一分组，图例标签带 n |
+| 数字来源 | 正文所有数字来自本页 prep chunk 的同一份聚合，图 1/2 的表可与图上逐格对账；内联数字一律经 `sprintf`/`format` 定型，避开 knitr 对大数的科学计数法改写 |
+| 不画的东西 | 非库姆兰遗址不并入洞穴矩阵；不画时间趋势（`Hellenistic-Roman` 与两个未解析分组使列非互斥）；`num_images` 不做对数轴或截断 |

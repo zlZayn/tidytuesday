@@ -1,0 +1,415 @@
+---
+title: "世界城堡 探索性可视化"
+subtitle: "TidyTuesday · 2026-09-01 (Week 36)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: false
+    toc-depth: 2
+    toc-location: left
+    code-fold: true
+    theme: sandstone
+    grid:
+      sidebar-width: 320px
+      body-width: 1020px
+      margin-width: 120px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 5,793 座城堡：大陆从点里浮出来，时间要等到 AD 1000 才开始堆
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr); library(tidyr); library(readr); library(stringr)
+  library(ggplot2); library(patchwork); library(sf); library(rnaturalearth)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("no project root containing assets/ found")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi)
+
+# ---- 本周色彩（只在本周生效；共享 theme 不含任何色值）----
+PAL <- list(
+  bg       = "#E8CFA3",  # 赭黄沙纸
+  land     = "#F3E6C9",  # 极淡陆地（比底色亮一点点，只做暗示）
+  ink      = "#46331F",  # 深褐
+  body     = "#6B5233",
+  grid     = "#DCC79B",
+  rule     = "#B99C6B",
+  castle   = "#46331F",
+  fortress = "#C1663A",
+  ruin     = "#7C6A52",  # 身份之外自加：ΔE 最大且仍在土色系内
+  palace   = "#6E7F6A"
+)
+
+# ---- 字体分工（字号一律取自共享阶梯 TT_TYPE，本周不自己发明任何字号）----
+# 家族一 TT_FAMILY[["text"]] 管标题 / 副标题 / 轴标题；家族二 TT_FAMILY[["data"]] 管轴标签 / 图例 / 小注 / 脚注。
+# 每个元素都显式回填 TT_TYPE 的值，避免「只写 family 时字号被继承链改掉」。
+gsz <- function(pt) pt * 25.4 / 72.27     # geom_text 的 size 单位 = 磅 / 2.845（标定图实测）
+tt_fam <- function() theme(
+  plot.title    = element_text(family = TT_FAMILY[["text"]], size = TT_TYPE[["title"]]),
+  plot.subtitle = element_text(family = TT_FAMILY[["text"]], size = TT_TYPE[["subtitle"]]),
+  axis.title    = element_text(family = TT_FAMILY[["text"]], size = TT_TYPE[["axis_title"]]),
+  axis.text     = element_text(family = TT_FAMILY[["data"]], size = TT_TYPE[["axis_text"]]),
+  legend.text   = element_text(family = TT_FAMILY[["data"]], size = TT_TYPE[["annot"]]),
+  plot.caption  = element_text(family = TT_FAMILY[["data"]], size = TT_TYPE[["caption"]]),
+  legend.title  = element_blank()
+)
+```
+
+```{r}
+#| label: prep
+#| echo: false
+cw <- read_csv("../data/world_castles.csv", show_col_types = FALSE)
+
+# 四类的堆叠与图例次序由数据决定：按各自主体的中位年份，从最古老排到最晚近
+cat_lv <- cw |> filter(!is.na(year)) |> summarise(m = median(year), .by = category) |>
+  arrange(m) |> pull(category)
+cat_n  <- cw |> count(category, name = "n")
+LBL    <- cat_n |>
+  transmute(category, lab = sprintf("%s  (n=%s)", category,
+                                    format(n, big.mark = ",", trim = TRUE))) |>
+  tibble::deframe()
+LBL    <- LBL[cat_lv]
+COLS   <- unlist(PAL[cat_lv]); names(COLS) <- cat_lv
+
+n_raw     <- nrow(cw)
+n_country <- n_distinct(cw$country)
+n_dated   <- sum(!is.na(cw$year))
+n_undated <- sum(is.na(cw$year))
+pct_und   <- 100 * n_undated / n_raw
+
+# 图 2 的口径：每一类里有多少行带年份
+cov_lv  <- cw |> summarise(p = mean(is.na(year)), .by = category) |>
+  arrange(desc(p)) |> pull(category)
+cov_sum <- cw |> mutate(cat = factor(category, levels = cov_lv)) |>
+  summarise(n = n(), undated = sum(is.na(year)), .by = cat) |>
+  mutate(pct = 100 * undated / n) |> arrange(cat)
+n_palace_und <- cov_sum$pct[cov_sum$cat == "palace"]
+n_castle_und <- cov_sum$pct[cov_sum$cat == "castle"]
+
+# 时间轴：50 年分箱（画在箱中心，梯形面积 = 箱内计数）
+tl <- cw |> filter(!is.na(year)) |>
+  transmute(bin = floor(year / 50) * 50, cat = factor(category, levels = cat_lv)) |>
+  count(bin, cat) |>
+  complete(bin = seq(-3000, 2000, 50), cat, fill = list(n = 0)) |>
+  mutate(bin_c = bin + 25)
+tl_tot      <- tl |> summarise(tot = sum(n), .by = bin)
+ymax_tl     <- max(tl_tot$tot)
+peak_bin    <- tl_tot |> slice_max(order_by = tot, n = 1)
+n_pre_bc500 <- tl |> filter(bin < -500) |> summarise(n = sum(n)) |> pull(n)
+n_bins_nz   <- sum(tl_tot$tot > 0)
+
+# 关注度：log10 年浏览量 vs 年份
+pv  <- cw |> filter(!is.na(year), pageviews > 0) |>
+  transmute(year, lpv = log10(pageviews), bin = floor(year / 50) * 50)
+pv_med <- pv |> summarise(med = median(lpv), nb = n(), .by = bin) |>
+  filter(nb >= 20) |> mutate(bin_c = bin + 25)
+rho_year_pv <- cor(pv$year, pv$lpv)
+n_pv_drop   <- sum(!is.na(cw$year) & cw$pageviews == 0)
+# 最亮的一格：直接用与本图完全相同的分箱构建一次，正文引用的就是图上这个数
+p_fame   <- ggplot(pv, aes(year, lpv)) + geom_bin2d(bins = c(70, 24))
+max_cell <- max(ggplot_build(p_fame)$data[[1]]$count)
+
+# 正文要引用的派生量：全部现场算出，不手打
+n_cols     <- ncol(cw)
+cat_txt    <- paste(sprintf("%s %d", cat_n$category, cat_n$n), collapse = "、")
+n_bins_all <- length(seq(-3000, 2000, 50))
+span_bc    <- -500 - (-3000)
+pv_orders  <- max(pv$lpv) - min(pv$lpv)
+top1       <- cw |> arrange(fame_rank) |> slice_head(n = 1)
+
+# 第 4 色的选色依据：在本色系候选里比 CIEDE2000（farver 随 ggplot2 一起装好）
+de <- function(a, b) as.numeric(farver::compare_colour(
+  from = farver::decode_colour(a, to = "lab"),
+  to   = farver::decode_colour(b, to = "lab"), from_space = "lab", method = "cie2000"))
+ruin_cand <- c("#8A6E4B", "#A8895C", "#7E5A45", "#B08A5E", "#5E6B57", "#9C7B4E",
+               "#6B5334", "#8C6239", "#A0703F", "#7C6A52", "#B99A6B")
+ruin_de   <- sapply(ruin_cand, function(cc) min(de(cc, c(PAL$ink, PAL$fortress, PAL$palace))))
+de_ruin   <- max(ruin_de)
+de_others <- range(ruin_de[ruin_de < de_ruin - 1e-9])
+de_decl3  <- min(de(PAL$ink, PAL$fortress), de(PAL$ink, PAL$palace),
+                 de(PAL$fortress, PAL$palace))
+
+# 年份精度：整百年 / 50 年整数 / year_approx 覆盖
+n_round100  <- sum(cw$year %% 100 == 0, na.rm = TRUE)
+n_round50   <- sum(cw$year %% 50 == 0, na.rm = TRUE)
+n_approx    <- sum(cw$year_approx == 1, na.rm = TRUE)
+n_approx100 <- sum(cw$year_approx == 1 & cw$year %% 100 == 0, na.rm = TRUE)
+
+# century 与 year 的一致性（第 n 世纪 AD = (n-1)*100+1 .. n*100；BC 同理取负）
+cy <- cw |> filter(!is.na(year)) |>
+  mutate(num = as.numeric(str_extract(century, "^[0-9]+")), bc = str_detect(century, "BC"),
+         lo = if_else(bc, -num * 100, (num - 1) * 100 + 1),
+         hi = if_else(bc, -num * 100 + 99, num * 100))
+n_cent_bad  <- sum(!(cy$year >= cy$lo & cy$year <= cy$hi))
+n_cent_kind <- n_distinct(cw$century)
+
+# 面板内嵌小注（数字全部来自上面同一份聚合）
+note_map <- sprintf("1 dot = 1 documented site\n%s sites \u00b7 %d countries\nlat %.1f\u00b0S \u2013 %.1f\u00b0N",
+                    format(n_raw, big.mark = ","), n_country, abs(min(cw$lat)), max(cw$lat))
+note_tl  <- sprintf("Before 500 BC: %d of %s dated rows (%.1f%%) spread over 2,500 years\nTallest bin: AD %d\u2013%d, n = %d",
+                    n_pre_bc500, format(n_dated, big.mark = ","), 100 * n_pre_bc500 / n_dated,
+                    peak_bin$bin, peak_bin$bin + 49, peak_bin$tot)
+note_pv  <- sprintf("Pearson r(year, log10 pageviews) = %+.3f\n%d bins with n \u2265 20 \u00b7 %s sites in cells",
+                    rho_year_pv, nrow(pv_med), format(nrow(pv), big.mark = ","))
+```
+
+> 本周的纸面与颜料：**赭黄沙纸 `#E8CFA3`** 打底，只上四条土色 —— 深褐 `#46331F`、砖橙 `#C1663A`、灰绿 `#6E7F6A`、陶土 `#7C6A52`；图表家族 = **点阵世界地图 ＋ 时间轴堆叠面积**；版式签名 = **地图去轴去边框 ＋ patchwork 上下拼接（地图上、时间轴下）＋ 面板内嵌小注**。
+>
+> 赭黄不是装饰：这是一份遗址清单，纸面就该像一张野外记录纸。四类遗址正好用掉四条颜料，其中陶土 `#7C6A52` 是给 `ruin` 补的第 4 色 —— 它与另外三色的 CIEDE2000 最小色差 `r sprintf("%.1f", de_ruin)`，是本色系候选里分离度最高的一个。
+
+## 数据范围与四个会影响读图的口径
+
+```{r}
+#| label: chk-semantics
+#| echo: false
+#| include: false
+# 口径硬闸：任一条不成立就中断渲染；结论只进渲染日志，不进 HTML。
+stopifnot(n_undated == sum(is.na(cw$century)),
+          n_cent_bad == 0,
+          n_distinct(cw$category) == 4L,
+          sum(is.na(cw$lat)) + sum(is.na(cw$lon)) == 0L,
+          all(cw$pageviews >= 0, na.rm = TRUE))
+cat(sprintf("[semantics] %d rows | %d dated | %d undated, year and century in lockstep | century-year mismatches %d", n_raw, n_dated, n_undated, n_cent_bad), "\n", file = stderr())
+
+
+```
+
+数据是 `world_castles.csv`（`r format(n_raw, big.mark = ",")` 行 × `r n_cols` 列，`r n_country` 个 `country` 取值）。看图之前有四件事必须先交代清楚，否则图会被误读：
+
+1. **`category` 恰好 4 类**：`r cat_txt` —— 四类互不重叠，没有第五类，也不需要合并。
+2. **年代缺口集中在一处**：`r format(n_undated, big.mark = ",")` 行（`r sprintf("%.1f", pct_und)`%）既没有 `year` 也没有 `century`，两个字段的空值逐行同步 —— 这是同一批遗址的整段年代缺测，而不是两个独立问题。
+3. **`century` 不提供 `year` 之外的信息**：按「第 n 世纪 = (n−1)×100+1 … n×100」复核，两者在 `r format(n_dated, big.mark = ",")` 行上零不一致，覆盖的却是同一批行；`century` 里还有 1 行不存在的标签 `0th century`（Tokat Castle，`year = 0`）。所以时间轴一律用数值 `year`。
+4. **年代是粗刻度**：整百年有 `r n_round100` 行（`r sprintf("%.1f", 100 * n_round100 / n_dated)`%），能被 50 整除的有 `r format(n_round50, big.mark = ",")` 行（`r sprintf("%.1f", 100 * n_round50 / n_dated)`%）；而 `year_approx = 1` 只标了 `r format(n_approx, big.mark = ",")` 行，其中落在整百年上的只有 `r n_approx100` 行 —— 近似标记远没有覆盖真正的粗刻度。
+
+`lat` / `lon` 零缺失，所以地图上 `r format(n_raw, big.mark = ",")` 个遗址一个都不用丢。
+
+## 主图：先把大陆点出来，再让时间堆起来
+
+```{r}
+#| label: fig-hero
+#| echo: false
+#| fig-cap: "Top: every documented site as one dot on a Robinson projection, continents left faint so the dot field draws the outline. Bottom: the same catalogue on a 50-year time axis, split by category — the first four millennia are almost empty and everything piles up after AD 1000."
+#| fig-width: 9.6
+#| fig-height: 8.4
+robin <- "+proj=robin +lon_0=0 +datum=WGS84 +units=m +no_defs"
+land  <- rnaturalearth::ne_countries(scale = 110, returnclass = "sf")
+
+sites <- cw |> mutate(cat = factor(category, levels = cat_lv))
+# 前三名地标的位置全部手工钉在空白海面/西伯利亚，避免标签压在点阵上
+top3  <- cw |> arrange(fame_rank) |> slice_head(n = 3) |>
+  transmute(lon, lat,
+            lx = c(96, -34, 148), ly = c(63, 53, 21),      # 全部落在空白海面或西伯利亚
+            hj = c(1, 1, 0.5),                                # 文字朝远离引线的一侧生长
+            sx = c(99, -31, 142), sy = c(62, 52, 26),         # 引线提前收住，不压字也不出画布
+            tag = sprintf("%s\n%d %s \u00b7 fame #%d", name, abs(year),
+                          if_else(year < 0, "BC", "AD"), fame_rank))
+
+bc_lab <- function(x) if_else(x < 0, paste0(abs(x), " BC"), paste0("AD ", x))
+
+p_map <- ggplot() +
+  geom_sf(data = land, fill = PAL$land, colour = NA) +
+  geom_point(data = sites, aes(lon, lat, colour = cat),
+             size = 0.42, alpha = 0.9, shape = 16) +
+  geom_segment(data = top3, aes(x = lon, y = lat, xend = sx, yend = sy),
+               colour = PAL$rule, linewidth = 0.25, lineend = "round") +
+  geom_text(data = top3, aes(lx, ly, label = tag, hjust = hj),
+            vjust = 0.5, family = TT_FAMILY[["data"]], size = gsz(TT_TYPE[["annot"]]), colour = PAL$ink,
+            lineheight = 1.05) +
+  annotate("text", x = -156, y = -30, label = note_map, hjust = 0, vjust = 1,
+           family = TT_FAMILY[["data"]], size = gsz(TT_TYPE[["annot"]]), colour = PAL$body, lineheight = 1.3) +
+  coord_sf(crs = st_crs(robin), default_crs = st_crs(4326), expand = FALSE) +
+  scale_colour_manual(values = COLS, breaks = cat_lv, labels = LBL) +
+  labs(title = "Six thousand dots, and the continents come out on their own",
+       subtitle = tt_strip("WORLD CASTLES", sprintf("%s SITES", format(n_raw, big.mark = ",")),
+                           sprintf("%d COUNTRIES", n_country), "ROBINSON", "1 DOT = 1 SITE"),
+       x = NULL, y = NULL) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid) +
+  tt_fam() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text        = element_blank(),
+    axis.title       = element_blank(),
+    axis.ticks       = element_blank(),
+    panel.border     = element_blank(),
+    plot.margin      = margin(14, 12, 2, 14),
+    legend.position  = "top",
+    legend.key.spacing.x = unit(11, "pt")
+  ) +
+  guides(colour = guide_legend(nrow = 1, override.aes = list(size = 2.6, alpha = 1)))
+
+p_tl <- ggplot(tl, aes(bin_c, n, fill = cat)) +
+  geom_area(colour = PAL$bg, linewidth = 0.18, position = position_stack(reverse = TRUE)) +
+  annotate("text", x = -2960, y = ymax_tl * 0.96, label = note_tl,
+           hjust = 0, vjust = 1, family = TT_FAMILY[["data"]], size = gsz(TT_TYPE[["annot"]]),
+           colour = PAL$body, lineheight = 1.3) +
+  scale_x_continuous(breaks = seq(-3000, 2000, 1000), labels = bc_lab) +
+  scale_fill_manual(values = COLS, breaks = cat_lv, labels = LBL, guide = "none") +
+  labs(title = NULL, subtitle = NULL,
+       x = "50-year bin (start year; every vertex sits at a bin centre)",
+       y = "sites per bin",
+       caption = tt_source("world_castles.csv", n_dated,
+                           sprintf("stacked bands ordered by median year (ruin %.0f then palace %.0f); %s of %s rows (%.1f%%) carry neither year nor century and are absent from the lower panel; the trapezoid area under each band equals the bin count",
+                                   median(cw$year[cw$category == "ruin"], na.rm = TRUE),
+                                   median(cw$year[cw$category == "palace"], na.rm = TRUE),
+                                   format(n_undated, big.mark = ","),
+                                   format(n_raw, big.mark = ","), pct_und))) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid) +
+  tt_fam() +
+  theme(plot.margin = margin(10, 14, 6, 14))
+
+p_map / p_tl + plot_layout(heights = c(1.95, 1))
+```
+
+**读数**：上半张图里 `r format(n_raw, big.mark = ",")` 个点不需要任何边框就已经把欧亚大陆的西缘、日本列岛和北非海岸线画了出来 —— 点密度本身就是地图。下半张图的故事更硬：**`r format(n_dated, big.mark = ",")` 行有年代的遗址里，500 BC 之前只有 `r n_pre_bc500` 行（`r sprintf("%.1f", 100 * n_pre_bc500 / n_dated)`%），却横跨 `r span_bc` 年**；`r n_bins_all` 个 50 年箱里只有 `r n_bins_nz` 个非空，最高的一个箱是 `r sprintf("AD %d\u2013%d", peak_bin$bin, peak_bin$bin + 49)`（`r peak_bin$tot` 座）。时间轴的左半张几乎是一段空白 —— 那不是绘图失误，那就是结论：**这份目录是 AD 1000 之后的目录**。
+
+## 三成八的遗址没有年代，而且宫殿与城堡差近一倍
+
+```{r}
+#| label: fig-coverage
+#| echo: false
+#| fig-cap: "Date coverage by category, bars ordered by how much of each category is undated. Green is a row with a year, brick orange is a row with neither year nor century."
+#| fig-width: 9.2
+#| fig-height: 4.2
+cov <- cw |> mutate(cat = factor(category, levels = cov_lv)) |>
+  transmute(cat, dated = factor(if_else(is.na(year), "no date", "dated"),
+                                levels = c("dated", "no date"))) |>
+  count(cat, dated)
+cov_lab <- sprintf("%s  %s", cov_sum$cat, format(cov_sum$n, big.mark = ",", trim = TRUE))
+names(cov_lab) <- cov_sum$cat
+
+p_cov <- ggplot(cov, aes(n, cat, fill = dated)) +
+  geom_col(width = 0.6, position = position_stack()) +
+  geom_text(data = cov_sum,
+            aes(x = n, y = cat, label = sprintf("%.0f%% no date (%s of %s)", pct,
+                                                format(undated, big.mark = ",", trim = TRUE),
+                                                format(n, big.mark = ",", trim = TRUE))),
+            inherit.aes = FALSE, hjust = -0.04, family = TT_FAMILY[["data"]],
+            size = gsz(TT_TYPE[["annot"]]), colour = PAL$ink) +
+  scale_fill_manual(values = c("dated" = PAL$palace, "no date" = PAL$fortress),
+                    breaks = c("dated", "no date"),
+                    labels = c("dated (year present)", "no date (year and century missing)")) +
+  scale_y_discrete(labels = cov_lab) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.34))) +
+  labs(title = "Palaces keep their dates; castles do not",
+       subtitle = tt_strip("DATE COVERAGE",
+                           sprintf("%s / %s DATED", format(n_dated, big.mark = ","),
+                                   format(n_raw, big.mark = ",")),
+                           "FILL = COVERAGE, NOT CATEGORY"),
+       x = "sites", y = NULL,
+       caption = tt_source("world_castles.csv", n_raw,
+                           sprintf("bar length = category size; orange share = rows with neither year nor century; the four categories sum to %s sites, of which %s (%.1f%%) are undated",
+                                   format(n_raw, big.mark = ","),
+                                   format(n_undated, big.mark = ","), pct_und))) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid) +
+  tt_fam() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    axis.text.y        = element_text(family = TT_FAMILY[["data"]],
+                                       size = TT_TYPE[["axis_text"]], colour = PAL$ink),
+    legend.position    = "top"
+  )
+
+p_cov
+```
+
+**读数**：缺年代的比例**不是均质的** —— ruin `r sprintf("%.1f", cov_sum$pct[cov_sum$cat == "ruin"])`%、fortress `r sprintf("%.1f", cov_sum$pct[cov_sum$cat == "fortress"])`%、castle `r sprintf("%.1f", n_castle_und)`%、palace 只有 `r sprintf("%.1f", n_palace_und)`%。宫殿是最容易被写进文献并留下确切年份的一类，城堡（尤其欧洲乡间的中小城堡）差了一倍。**这意味着主图下半张的时间轴在类别构成上是有偏的：宫殿被过度代表。** 这一偏倚在主图的时间轴上无法回避，读者需要带着它读下半张图。
+
+## 关注度不随年代走
+
+```{r}
+#| label: fig-fame
+#| echo: false
+#| fig-cap: "log10 annual pageviews against construction year: the point cloud stays vertical in every period, so age carries almost no information about attention."
+#| fig-width: 9.2
+#| fig-height: 5.0
+p_fame_full <- p_fame +
+  geom_line(data = pv_med, aes(bin_c, med), inherit.aes = FALSE,
+            colour = PAL$fortress, linewidth = 0.75) +
+  geom_point(data = pv_med, aes(bin_c, med), inherit.aes = FALSE,
+             colour = PAL$fortress, size = 0.85) +
+  annotate("text", x = 1975, y = 6.3, label = note_pv, hjust = 1, vjust = 1,
+           family = TT_FAMILY[["data"]], size = gsz(TT_TYPE[["annot"]]), colour = PAL$ink, lineheight = 1.3) +
+  scale_fill_gradientn(
+    colours = c("#F4E8CE", "#E0BF8C", "#C1663A", "#6B4A2A", "#3A2A19"),
+    trans = "log10", breaks = c(1, 3, 10, 30, 60), name = "sites per cell",
+    guide = guide_colourbar(barwidth = unit(72, "pt"), barheight = unit(7, "pt"),
+                            title.position = "top", ticks.colour = NA)
+  ) +
+  scale_x_continuous(breaks = seq(-500, 2000, 500), labels = bc_lab) +
+  labs(title = "Attention does not track age",
+       subtitle = tt_strip("LOG10 ANNUAL PAGEVIEWS",
+                           sprintf("%s SITES", format(nrow(pv), big.mark = ",")),
+                           "70 x 24 CELLS", "LOG10 COUNT SCALE"),
+       x = "construction year", y = expression(log[10] ~ "annual pageviews"),
+       caption = tt_source("world_castles.csv", nrow(pv),
+                           sprintf("cells darken with the number of sites; the brick line joins the median log10 pageviews of every 50-year bin holding at least 20 sites; %d dated rows drop out because pageviews = 0 has no logarithm; Pearson r between the two axes is %+.3f",
+                                   n_pv_drop, rho_year_pv))) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid) +
+  tt_fam() +
+  theme(
+    legend.position      = "top",
+    legend.justification = "left",
+    # 色带必须自报含义：共享 theme 默认清空图例标题，这里只给图 3 恢复
+    legend.title         = element_text(family = TT_FAMILY[["data"]],
+                                         size = TT_TYPE[["annot"]], colour = PAL$body)
+  )
+
+p_fame_full
+```
+
+**读数**：横轴是建造年份，纵轴是 `log10` 年浏览量，颜色是落在同一格里的遗址数。整块云是**竖的** —— 从 500 BC 到 AD 2000，每个年代的浏览量都横跨同样的 `r sprintf("%.0f", pv_orders)` 个数量级：Pearson `r sprintf("r = %+.3f", rho_year_pv)`。砖橙线（每箱浏览量中位数，只取箱内不少于 20 座的那些箱）在 `r sprintf("%.1f", median(pv_med$med))` 上下浮动，没有任何单调趋势。**古老不等于被看见**：目录里最有名的 `r top1$name`（`fame_rank` #`r top1$fame_rank`，`r abs(top1$year)` BC）和近代宫殿并排站在同一列上。图上 `r format(nrow(pv), big.mark = ",")` 个点里，最亮的一格也只有 `r max_cell` 座。
+
+```{r}
+#| label: chk-typeset
+#| echo: false
+#| include: false
+# 排版硬闸：字号必须全部落在共享阶梯里、家族不超过两个；结论只进渲染日志，不进 HTML。
+aud <- dplyr::bind_rows(tt_audit(p_map), tt_audit(p_tl), tt_audit(p_cov), tt_audit(p_fame_full))
+sz  <- unique(stats::na.omit(aud$size))
+fam <- unique(stats::na.omit(aud$family))
+stopifnot(length(sz) <= TT_TYPE_MAX, length(fam) <= TT_FAMILY_MAX, all(aud$in_ladder))
+cat(sprintf("[typeset] %d sizes (%s) | %d families (%s) | off-ladder %d", length(sz),
+            paste(sz, collapse = "/"), length(fam), paste(fam, collapse = "/"),
+            sum(!aud$in_ladder)), "\n", file = stderr())
+```
+
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/world_castles.csv`（`r format(n_raw, big.mark = ",")` × `r n_cols`；`r n_country` 个 `country` 取值、`r n_distinct(cw$iso)` 个 `iso` 取值） |
+| 入图（地图） | `r format(n_raw, big.mark = ",")` 个遗址全部入图：`lat` / `lon` 零缺失，无需筛选 |
+| 入图（时间轴） | `r format(n_dated, big.mark = ",")` 行；`r tt_flow(n_raw, n_dated, sprintf("%s 行既无 year 也无 century", format(n_undated, big.mark = ",")))` |
+| 入图（关注度热图） | `r format(nrow(pv), big.mark = ",")` 行；`r tt_flow(n_raw, nrow(pv), sprintf("%s 行无年代", format(n_undated, big.mark = ",")), sprintf("%d 行有年代但 pageviews = 0，取不了 log10", n_pv_drop))` |
+| 口径差（必须分清） | **原始 `r format(n_raw, big.mark = ",")`** = castle `r cat_n$n[cat_n$category == "castle"]` + fortress `r cat_n$n[cat_n$category == "fortress"]` + ruin `r cat_n$n[cat_n$category == "ruin"]` + palace `r cat_n$n[cat_n$category == "palace"]`；**时间轴 `r format(n_dated, big.mark = ",")`**；**热图 `r format(nrow(pv), big.mark = ",")`**。图上图例与脚注一律按各自面板的口径报数 |
+| 为什么地图与时间轴在同一张图上 | 版式签名是 **patchwork 上下拼接（地图上、时间轴下）**：上半是点阵世界地图、下半是同一份目录的时间轴堆叠面积，两者共用一条图例，主图脚注一次交代两个面板的口径 |
+| 第 4 色的依据 | 四类遗址需要四条颜料，土色系里可用的只有三条；按 CIEDE2000 在候选土色中取到与「深褐 / 砖橙 / 灰绿」最小色差最大者：`#7C6A52` ΔE `r sprintf("%.1f", de_ruin)`（其余候选 `r sprintf("%.1f", de_others[1])`–`r sprintf("%.1f", de_others[2])`；已用的三色互相最小 ΔE `r sprintf("%.1f", de_decl3)`）。堆叠带之间另加 0.18pt 底色描边，避免相邻两类靠色 |
+| century 为什么不用 | `r n_cent_kind` 个取值全部可解析，且与 `year` 在 `r format(n_dated, big.mark = ",")` 行上零不一致 —— 它不提供 `year` 之外的信息，却含 1 行 `0th century`（Tokat Castle，`year = 0`）；时间轴一律用数值 `year` |
+| 投影与底图 | `coord_sf(crs = "+proj=robin")`；底图 `rnaturalearth::ne_countries(scale = 110)` 填极淡 `#F3E6C9`、零描边、去轴去网格；1 个点 = 1 个遗址 |
+| 图上没有画的 | 任何未出现在数据里的注释地名；地标标注只取 `fame_rank` 前 3 行 |
