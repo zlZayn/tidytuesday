@@ -2,7 +2,7 @@
 
 个人 TidyTuesday 参与项目：每周拉取官方数据，用 R 做数据检查与可视化，以 Quarto 产出报告并长期积累。本文档是项目入口，说明目录结构与环境要求；每周的流程、模板与约定见 [weeks/README.md](weeks/README.md)。
 
-数据来自官方 [TidyTuesday 仓库](https://github.com/rfordatascience/tidytuesday)（每周二发布），本项目的可视化展示站点见 https://zlzayn.github.io/tidytuesday/。
+数据来自官方 [TidyTuesday 仓库](https://github.com/rfordatascience/tidytuesday)（每周二发布），本项目的可视化展示站点见 <https://zlzayn.github.io/tidytuesday/>。
 
 ## 目录结构
 

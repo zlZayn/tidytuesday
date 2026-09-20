@@ -1,6 +1,6 @@
 # tidytuesday — 维护索引
 
-个人 TidyTuesday 项目：每周拉取官方数据，用 R / Quarto 产出数据检查与探索性可视化，push 后由 GitHub Actions 部署到 https://zlzayn.github.io/tidytuesday/。
+个人 TidyTuesday 项目：每周拉取官方数据，用 R / Quarto 产出数据检查与探索性可视化，push 后由 GitHub Actions 部署到 <https://zlzayn.github.io/tidytuesday/>。
 
 ## 全局规则（本项目特有）
 - 每周工作区隔离：数据、代码、产物都在 `weeks/<YYYY-MM-DD>/` 内，跨周不共享文件。
@@ -30,6 +30,7 @@
 - [ ] `01_data_check.qmd` 对空 `data/` 的处置：加 `knitr::knit_exit()` 或改成显式报错（六个模板需同步）。
 
 ## 活跃坑
+- Markdown 里裸 URL 紧跟中文标点会被 GitHub 自动链接吞进 href（`…/tidytuesday/。` → href 带 `%E3%80%82`，点开 404）：一律写成尖括号形式 `<https://…/>`。
 - 站点收录规则：`code/update_site.R` 优先 `output/02_exploratory_visualization.html`，缺失时回退 `output/01_data_check.html` 并标「数据检查」；只渲染 01 的周仍进侧边栏（展示的是数据检查）。
 - `weeks/<date>/code/.gitignore` 由 Quarto 渲染时自动生成（`/.quarto/` 与 `**/*.quarto_ipynb`），不是手写文件。
 - 根 `index.html` 由 CI 每次 push 重新生成：本地手改会被覆盖，要改展示逻辑就改 `code/update_site.R`。
