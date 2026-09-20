@@ -1,0 +1,300 @@
+---
+title: "TidyTuesday 数据检查"
+subtitle: "自动质量检查 · 7 步 + 清洗审计 + 整洁演示"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+params:
+  week: "2026-09-08"
+---
+
+# 数据检查（本周自动发现）
+
+本页对 `weeks/`r params$week`/data/` 下所有 CSV 自动执行三件事：
+
+1. **质量检查（tidy-data-inspector）**：7 步确定性检查——结构、缺失与重复、低基数、高基数数值/日期/字符串、相关性告警。
+2. **清洗审计（data-cleaning）**：先审计后清洗、原始不可覆盖——空白文本归一为 `NA`、剥离全空行与完全重复行、数值列加 `*_outlier_flag`，清洗结果写入 `output/<name>_cleaned.csv` 并附结构化日志。
+3. **整洁演示（tidy-data）**：把各数据集的字段元数据合并为一张长表，演示按组汇总与长宽重塑。
+
+本周目录：`r params$week`（自动发现该周 `data/` 下所有 CSV 并逐个检查）。
+
+本报告仅陈述事实，不含"好 / 坏"判断。
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
+  library(stringr)
+  library(readr)
+})
+
+# 路径解析：用项目根标记 assets/ 定位根目录（兼容工作目录 / 临时文件名差异），
+# 周目录由 params$week 决定（每个周文件单独设定）
+find_root <- function() {
+  starts <- unique(c(getwd(), dirname(knitr::current_input())))
+  for (s in starts) {
+    cur <- normalizePath(s, mustWork = FALSE)
+    for (i in seq_len(10)) {
+      if (dir.exists(file.path(cur, "assets"))) return(cur)
+      cur <- dirname(cur)
+    }
+  }
+  stop("未找到项目根目录（含 assets 目录）")
+}
+
+root <- find_root()
+week <- params$week
+data_dir <- file.path(root, "weeks", week, "data")
+out_dir <- file.path(root, "weeks", week, "output")
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+csv_files <- list.files(data_dir, pattern = "\\.csv$", full.names = TRUE)
+if (length(csv_files) == 0) {
+  cat("WARNING: 未在", data_dir, "找到任何 CSV 文件\n")
+}
+
+low_card_threshold <- 20
+corr_threshold <- 0.99
+
+week_summary <- tibble(
+  dataset = character(),
+  rows = integer(),
+  cols = integer(),
+  missing_cells = integer(),
+  dup_rows = integer()
+)
+```
+
+```{r}
+#| label: inspect-and-clean
+#| echo: false
+#| results: asis
+
+for (f in csv_files) {
+  ds_name <- sub("\\.csv$", "", basename(f))
+  df <- read_csv(f, show_col_types = FALSE)
+  n_total <- nrow(df)
+
+  cat(sprintf("\n## 数据集：%s\n\n", ds_name))
+  cat(sprintf("**维度**：%d 行 × %d 列\n\n", nrow(df), ncol(df)))
+
+  col_info <- tibble(
+    name = names(df),
+    type = map_chr(df, \(x) if (inherits(x, "Date") || inherits(x, "POSIXct")) "datetime" else if (is.numeric(x)) "numeric" else "string"),
+    n_unique = map_int(df, \(x) length(unique(x))),
+    n_missing = map_int(df, \(x) sum(is.na(x)))
+  ) |>
+    mutate(missing_pct = n_missing / n_total)
+
+  # ---- 1. Skeleton ----
+  cat("### 1. Skeleton\n\n")
+  print(knitr::kable(
+    col_info |> mutate(missing_pct = sprintf("%.2f%%", missing_pct * 100)),
+    format = "html", escape = TRUE))
+  cat("\n")
+
+  # ---- 2. Missing and duplicates ----
+  cat("### 2. Missing and duplicates\n\n")
+  miss <- col_info |> filter(n_missing > 0) |> arrange(desc(missing_pct))
+  if (nrow(miss) > 0) {
+    print(knitr::kable(
+      miss |> select(name, type, n_missing, missing_pct) |>
+        mutate(missing_pct = sprintf("%.2f%%", missing_pct * 100)),
+      format = "html", escape = TRUE))
+  } else {
+    cat("**无缺失值。**\n\n")
+  }
+  n_dup <- sum(duplicated(df))
+  cat(sprintf("**完全重复行数：%d**\n\n", n_dup))
+
+  # ---- 3. Low-cardinality ----
+  cat(sprintf("### 3. Low-cardinality (unique <= %d)\n\n", low_card_threshold))
+  low <- col_info |> filter(n_unique <= low_card_threshold)
+  if (nrow(low) > 0) {
+    freq <- map_dfr(low$name, \(col) {
+      df |>
+        count(.data[[col]]) |>
+        rename(value = all_of(col)) |>
+        mutate(column = col, value = as.character(value), prop = n / n_total) |>
+        select(column, value, n, prop)
+    }) |> arrange(column, desc(n))
+    print(knitr::kable(
+      freq |> mutate(prop = sprintf("%.2f%%", prop * 100)),
+      format = "html", escape = TRUE))
+  } else {
+    cat(sprintf("**无低基数列（unique <= %d）。**\n\n", low_card_threshold))
+  }
+
+  # ---- 4. High-cardinality numeric ----
+  cat(sprintf("### 4. High-cardinality numeric (> %d)\n\n", low_card_threshold))
+  num_cols <- col_info |> filter(type == "numeric", n_unique > low_card_threshold) |> pull(name)
+  if (length(num_cols) > 0) {
+    num_stats <- map_dfr(num_cols, \(col) {
+      v <- df[[col]]
+      q <- quantile(v, c(0.25, 0.5, 0.75), na.rm = TRUE)
+      iqr <- q[3] - q[1]
+      lo <- q[1] - 1.5 * iqr
+      hi <- q[3] + 1.5 * iqr
+      n_nm <- sum(!is.na(v))
+      tibble(
+        column = col, min = min(v, na.rm = TRUE), max = max(v, na.rm = TRUE),
+        mean = mean(v, na.rm = TRUE), median = q[2], sd = sd(v, na.rm = TRUE),
+        q1 = q[1], q3 = q[3], n_negative = sum(v < 0, na.rm = TRUE),
+        n_zero = sum(v == 0, na.rm = TRUE),
+        outlier_pct = sum(v < lo | v > hi, na.rm = TRUE) / n_nm
+      )
+    })
+    print(knitr::kable(
+      num_stats |> mutate(
+        across(c(min, max, mean, median, sd, q1, q3), \(x) sprintf("%.2f", x)),
+        outlier_pct = sprintf("%.2f%%", outlier_pct * 100)),
+      format = "html", escape = TRUE))
+  } else {
+    cat("**无高基数数值列。**\n\n")
+  }
+
+  # ---- 5. High-cardinality datetime ----
+  cat(sprintf("### 5. High-cardinality datetime (> %d)\n\n", low_card_threshold))
+  dt_cols <- col_info |> filter(type == "datetime", n_unique > low_card_threshold) |> pull(name)
+  if (length(dt_cols) > 0) {
+    dt_stats <- map_dfr(dt_cols, \(col) {
+      v <- df[[col]] |> as.Date()
+      tibble(
+        column = col, earliest = min(v, na.rm = TRUE), latest = max(v, na.rm = TRUE),
+        span_days = as.integer(max(v, na.rm = TRUE) - min(v, na.rm = TRUE)),
+        n_missing = sum(is.na(v)))
+    })
+    print(knitr::kable(dt_stats, format = "html", escape = TRUE))
+  } else {
+    cat("**无高基数日期列。**\n\n")
+  }
+
+  # ---- 6. High-cardinality string ----
+  cat(sprintf("### 6. High-cardinality string (> %d)\n\n", low_card_threshold))
+  str_cols <- col_info |> filter(type == "string", n_unique > low_card_threshold) |> pull(name)
+  if (length(str_cols) > 0) {
+    str_stats <- map_dfr(str_cols, \(col) {
+      v <- df[[col]]
+      vc <- v[!is.na(v)]
+      mode_val <- names(sort(table(vc), decreasing = TRUE))[1]
+      tibble(
+        column = col,
+        min_len = min(str_length(vc)), max_len = max(str_length(vc)),
+        n_empty = sum(vc == ""),
+        n_ws_only = sum(str_trim(vc) == "" & vc != ""),
+        mode = mode_val,
+        mode_pct = sum(vc == mode_val, na.rm = TRUE) / length(vc))
+    })
+    print(knitr::kable(
+      str_stats |> mutate(mode_pct = sprintf("%.2f%%", mode_pct * 100)),
+      format = "html", escape = TRUE))
+  } else {
+    cat("**无高基数字符串列。**\n\n")
+  }
+
+  # ---- 7. Correlation alerts ----
+  cat(sprintf("### 7. Correlation alerts (|r| > %s)\n\n", corr_threshold))
+  num_df <- df |> select(where(is.numeric))
+  if (ncol(num_df) >= 2) {
+    corr <- cor(num_df, use = "pairwise.complete.obs")
+    idx <- which(abs(corr) > corr_threshold & corr < 1, arr.ind = TRUE)
+    idx <- idx[idx[, 1] < idx[, 2], , drop = FALSE]
+    if (nrow(idx) > 0) {
+      pairs <- tibble(
+        var1 = rownames(corr)[idx[, 1]], var2 = colnames(corr)[idx[, 2]],
+        corr = corr[idx]) |>
+        arrange(desc(abs(corr)))
+      print(knitr::kable(
+        pairs |> mutate(corr = sprintf("%.3f", corr)),
+        format = "html", escape = TRUE))
+    } else {
+      cat(sprintf("**无 |r| > %s 的列对。**\n\n", corr_threshold))
+    }
+  } else {
+    cat("**数值列不足 2 列，跳过相关性检查。**\n\n")
+  }
+
+  # ---- 8. 清洗审计与处理（data-cleaning）----
+  cat("### 8. 清洗审计与处理（data-cleaning）\n\n")
+  df_c <- df |> mutate(across(where(is.character), \(x) na_if(str_trim(x), "")))
+  empty_flag <- df_c |>
+    mutate(across(everything(), is.na)) |>
+    rowwise() |>
+    mutate(.empty = all(c_across(everything()), na.rm = TRUE)) |>
+    pull(.empty)
+  n_empty <- sum(empty_flag)
+  df_c <- df_c |> filter(!empty_flag)
+  n_dup2 <- sum(duplicated(df_c))
+  df_c <- df_c |> distinct()
+  flag_cols <- col_info |> filter(type == "numeric") |> pull(name)
+  if (length(flag_cols) > 0) {
+    df_c <- df_c |> mutate(across(all_of(flag_cols), \(x) {
+      q <- quantile(x, c(0.25, 0.75), na.rm = TRUE)
+      iqr <- q[2] - q[1]
+      (x < q[1] - 1.5 * iqr) | (x > q[2] + 1.5 * iqr)
+    }, .names = "{.col}_outlier_flag"))
+  }
+  clean_path <- file.path(out_dir, paste0(ds_name, "_cleaned.csv"))
+  write_csv(df_c, clean_path)
+
+  log_tbl <- tibble(
+    step = c("空白文本→NA", "全空行剔除", "完全重复行剔除", "数值列异常值标记"),
+    rule = c("字符列 trim 后空串转 NA", "所有字段为空/NA 的行删除",
+             "duplicated() 全重复行删除", "IQR 法新增 *_outlier_flag（不删行）"),
+    affected = c("-", n_empty, n_dup2, length(flag_cols)),
+    decision = c("默认处理", "默认处理（低风险）", "默认处理（低风险）", "仅标记不删除"))
+  print(knitr::kable(log_tbl, format = "html", escape = TRUE))
+  cat(sprintf("\n清洗结果已写入 `%s`（%d 行 × %d 列，原始 `%s` 未覆盖）。\n\n",
+              clean_path, nrow(df_c), ncol(df_c), f))
+
+  week_summary <- bind_rows(week_summary, tibble(
+    dataset = ds_name, rows = n_total, cols = ncol(df),
+    missing_cells = sum(col_info$n_missing), dup_rows = n_dup))
+}
+```
+
+```{r}
+#| label: week-summary
+#| echo: false
+#| results: asis
+cat("## 周级整洁汇总（tidy-data）\n\n")
+print(knitr::kable(week_summary, format = "html", escape = TRUE))
+
+cat("\n### 字段元数据长表 → 各类型计数宽表\n\n")
+all_meta <- map_dfr(csv_files, \(f) {
+  ds <- sub("\\.csv$", "", basename(f))
+  d <- read_csv(f, show_col_types = FALSE)
+  tibble(
+    dataset = ds, column = names(d),
+    type = map_chr(d, \(x) if (is.numeric(x)) "numeric"
+                    else if (inherits(x, "Date") || inherits(x, "POSIXct")) "datetime"
+                    else "string"))
+})
+type_wide <- all_meta |>
+  count(dataset, type) |>
+  pivot_wider(names_from = type, values_from = n, values_fill = 0)
+print(knitr::kable(type_wide, format = "html", escape = TRUE))
+```
+
