@@ -4,39 +4,52 @@
 # 用法: Rscript code/update_site.R
 #
 # 行为:
-#   1. 扫描 weeks/<date>/output/ 下所有 02_exploratory_visualization.html
-#   2. 按日期排序，最新周作为默认展示（iframe 嵌入）
-#   3. 生成 index.html（含历史周链接列表）到项目根目录
+#   1. 扫描 weeks/<date>/output/：优先取 02_exploratory_visualization.html，
+#      缺失时回退 01_data_check.html（保证每一周都进侧边栏）
+#   2. 按目录名排序（新 -> 旧），最新周作为默认展示（iframe 嵌入）
+#   3. 生成 index.html（含全部周链接列表）到项目根目录
 # ------------------------------------------------------------------------------
 # ⚠ 硬编码约定（本脚本与每周 qmd 模板互相配合，改动任一侧都会破坏部署）:
-#   1. 可视化文件固定名: weeks/<date>/output/02_exploratory_visualization.html
+#   1. 可视化产物固定名: weeks/<date>/output/02_exploratory_visualization.html
 #      - 来自 qmd 模板: 每周渲染 02_exploratory_visualization.qmd 得到同名 html
-#      - 脚本只认这个文件名，不改名、不换名
-#   2. 周目录命名: weeks/<YYYY-MM-DD>/（字符串排序即时间排序）
+#   2. 回退产物固定名: weeks/<date>/output/01_data_check.html
+#      - 该周没有 02 时以它进侧边栏，条目带「数据检查」标记
+#   3. 周目录命名: weeks/<YYYY-MM-DD>/（字符串排序即时间排序）
 #      - 最新周 = 目录名最大的那一个
-#   3. 每周流程: 渲染出 02_exploratory_visualization.html 后 push 即可，
-#      下次部署自动重扫目录，无需改动脚本
+#   4. 每周流程: 渲染出 HTML 后 push 即可，下次部署自动重扫目录，无需改动脚本
 #   若改模板文件名或目录结构，必须同步改这里。
 # ------------------------------------------------------------------------------
 # 依赖: 无第三方包，纯 base R
 # ==============================================================================
 
+VIZ_FILE <- "02_exploratory_visualization.html"
+CHECK_FILE <- "01_data_check.html"
+
 # ------------------------------------------------------------------------------
-# 1. 扫描各周的可视化产物
+# 1. 扫描各周产物（02 优先，回退 01）
 # ------------------------------------------------------------------------------
 week_dirs <- list.dirs("weeks", recursive = FALSE, full.names = TRUE)
 weeks <- character(0)
+files <- character(0)
 for (d in week_dirs) {
-  viz <- file.path(d, "output", "02_exploratory_visualization.html")
+  viz <- file.path(d, "output", VIZ_FILE)
+  chk <- file.path(d, "output", CHECK_FILE)
   if (file.exists(viz)) {
     weeks <- c(weeks, d)
+    files <- c(files, VIZ_FILE)
+  } else if (file.exists(chk)) {
+    weeks <- c(weeks, d)
+    files <- c(files, CHECK_FILE)
   }
 }
-weeks <- sort(weeks, decreasing = TRUE)  # 最新在前
 
 if (length(weeks) == 0) {
-  stop("未找到任何周的可视化产物（weeks/<date>/output/02_exploratory_visualization.html）")
+  stop(sprintf("未找到任何周的产物（%s 或 %s）", VIZ_FILE, CHECK_FILE))
 }
+
+ord <- order(weeks, decreasing = TRUE)  # 最新在前
+weeks <- weeks[ord]
+files <- files[ord]
 
 # ------------------------------------------------------------------------------
 # 2. 提取每周标题（从 html 的 <title>）
@@ -54,22 +67,24 @@ get_title <- function(html_path) {
 }
 
 # 相对路径：index.html 在根目录，到每周 html 的相对路径
-rel_viz <- function(week_dir) {
-  file.path(basename("."), week_dir, "output", "02_exploratory_visualization.html")
+rel_out <- function(week_dir, file_name) {
+  file.path(basename("."), week_dir, "output", file_name)
 }
 
-links <- vapply(weeks, function(d) {
-  viz <- file.path(d, "output", "02_exploratory_visualization.html")
-  title <- get_title(viz)
+links <- vapply(seq_along(weeks), function(i) {
+  d <- weeks[i]
+  path <- file.path(d, "output", files[i])
+  title <- get_title(path)
   date_str <- basename(d)
+  kind <- if (identical(files[i], VIZ_FILE)) "" else ' <span class="kind">数据检查</span>'
   sprintf(
-    '<li><a href="%s" onclick="loadViz(this)">%s</a> <span class="date">%s</span></li>',
-    rel_viz(d), title, date_str
+    '<li><a href="%s" onclick="loadViz(this)">%s%s</a> <span class="date">%s</span></li>',
+    rel_out(d, files[i]), title, kind, date_str
   )
 }, character(1))
 
-latest_viz <- rel_viz(weeks[1])
-latest_title <- get_title(file.path(weeks[1], "output", "02_exploratory_visualization.html"))
+latest_viz <- rel_out(weeks[1], files[1])
+latest_title <- get_title(file.path(weeks[1], "output", files[1]))
 latest_date <- basename(weeks[1])
 
 # ------------------------------------------------------------------------------
@@ -96,7 +111,7 @@ parts <- c(
   '  header .tag { font-size: 12px; color: #86868b; }',
   '  main { flex: 1; display: flex; min-height: 0; }',
   '  aside {',
-  '    width: 240px; background: #fff; border-right: 1px solid #e5e5e7;',
+  '    width: 260px; background: #fff; border-right: 1px solid #e5e5e7;',
   '    padding: 20px 0; overflow-y: auto; flex-shrink: 0;',
   '  }',
   '  aside h2 { font-size: 12px; color: #86868b; text-transform: uppercase; letter-spacing: .05em;',
@@ -109,6 +124,8 @@ parts <- c(
   '  aside li a:hover { background: #f5f5f7; }',
   '  aside li a.active { background: #f0f0f4; border-left-color: #0e8056; font-weight: 600; }',
   '  aside li .date { font-size: 11px; color: #86868b; margin-left: 6px; }',
+  '  aside li .kind { font-size: 10px; color: #0e8056; border: 1px solid #b7d8c9;',
+  '                   border-radius: 3px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }',
   '  .content { flex: 1; padding: 20px 28px; min-width: 0; display: flex; flex-direction: column; }',
   '  .content .meta { margin-bottom: 12px; }',
   '  .content .meta h3 { font-size: 15px; font-weight: 600; }',
@@ -128,7 +145,7 @@ parts <- c(
   '</header>',
   '<main>',
   '  <aside>',
-  '    <h2>Weekly Visualizations</h2>',
+  '    <h2>Weekly Reports</h2>',
   '    <ul>', paste(links, collapse = "\n"), '</ul>',
   '  </aside>',
   '  <div class="content">',
@@ -139,7 +156,7 @@ parts <- c(
   '    <iframe id="viz-frame" src="', latest_viz, '" title="可视化"></iframe>',
   '  </div>',
   '</main>',
-  '<footer>自动生成于 ', format(Sys.Date(), "%Y-%m-%d"), ' · 由 update_site.R 维护</footer>',
+  '<footer>自动生成于 ', format(Sys.Date(), "%Y-%m-%d"), ' · 由 update_site.R 维护 · 共 ', length(weeks), ' 周</footer>',
   '<script>',
   '  function loadViz(link) {',
   '    document.getElementById("viz-frame").src = link.getAttribute("href");',
@@ -160,5 +177,6 @@ parts <- c(
 
 writeLines(parts, "index.html", useBytes = TRUE)
 cat("==> index.html 已生成\n")
+cat("    收录周数:", length(weeks), "（可视化", sum(files == VIZ_FILE), "· 数据检查回退", sum(files == CHECK_FILE), "）\n")
 cat("    最新周:", latest_date, "-", latest_title, "\n")
 cat("    历史周:", length(weeks) - 1, "个\n")

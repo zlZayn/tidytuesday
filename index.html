@@ -18,7 +18,7 @@
   header .tag { font-size: 12px; color: #86868b; }
   main { flex: 1; display: flex; min-height: 0; }
   aside {
-    width: 240px; background: #fff; border-right: 1px solid #e5e5e7;
+    width: 260px; background: #fff; border-right: 1px solid #e5e5e7;
     padding: 20px 0; overflow-y: auto; flex-shrink: 0;
   }
   aside h2 { font-size: 12px; color: #86868b; text-transform: uppercase; letter-spacing: .05em;
@@ -31,6 +31,8 @@
   aside li a:hover { background: #f5f5f7; }
   aside li a.active { background: #f0f0f4; border-left-color: #0e8056; font-weight: 600; }
   aside li .date { font-size: 11px; color: #86868b; margin-left: 6px; }
+  aside li .kind { font-size: 10px; color: #0e8056; border: 1px solid #b7d8c9;
+                   border-radius: 3px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }
   .content { flex: 1; padding: 20px 28px; min-width: 0; display: flex; flex-direction: column; }
   .content .meta { margin-bottom: 12px; }
   .content .meta h3 { font-size: 15px; font-weight: 600; }
@@ -50,28 +52,36 @@
 </header>
 <main>
   <aside>
-    <h2>Weekly Visualizations</h2>
+    <h2>Weekly Reports</h2>
     <ul>
+<li><a href="./weeks/2026-09-15/output/02_exploratory_visualization.html" onclick="loadViz(this)">死海古卷的洞穴档案 探索性可视化</a> <span class="date">2026-09-15</span></li>
+<li><a href="./weeks/2026-09-08/output/02_exploratory_visualization.html" onclick="loadViz(this)">卡布奇诺指数：一杯咖啡要干多久</a> <span class="date">2026-09-08</span></li>
+<li><a href="./weeks/2026-09-01/output/02_exploratory_visualization.html" onclick="loadViz(this)">世界城堡 探索性可视化</a> <span class="date">2026-09-01</span></li>
+<li><a href="./weeks/2026-08-25/output/02_exploratory_visualization.html" onclick="loadViz(this)">乡村音乐词曲作者生态：榜单长尾与歌词词频</a> <span class="date">2026-08-25</span></li>
+<li><a href="./weeks/2026-08-18/output/02_exploratory_visualization.html" onclick="loadViz(this)">IELTS 考生构成与成绩 探索性可视化</a> <span class="date">2026-08-18</span></li>
+<li><a href="./weeks/2026-08-11/output/02_exploratory_visualization.html" onclick="loadViz(this)">Palomar 星系光谱 探索性可视化</a> <span class="date">2026-08-11</span></li>
 <li><a href="./weeks/2026-08-04/output/02_exploratory_visualization.html" onclick="loadViz(this)">Basotho Wool 探索性可视化</a> <span class="date">2026-08-04</span></li>
 </ul>
   </aside>
   <div class="content">
     <div class="meta">
       <h3 id="viz-title">
-Basotho Wool 探索性可视化
+死海古卷的洞穴档案 探索性可视化
 </h3>
       <span class="date" id="viz-date">
-2026-08-04
+2026-09-15
 </span>
     </div>
     <iframe id="viz-frame" src="
-./weeks/2026-08-04/output/02_exploratory_visualization.html
+./weeks/2026-09-15/output/02_exploratory_visualization.html
 " title="可视化"></iframe>
   </div>
 </main>
 <footer>自动生成于 
-2026-08-04
- · 由 update_site.R 维护</footer>
+2026-09-20
+ · 由 update_site.R 维护 · 共 
+7
+ 周</footer>
 <script>
   function loadViz(link) {
     document.getElementById("viz-frame").src = link.getAttribute("href");
