@@ -99,7 +99,7 @@ execute:
 ## 自动部署（GitHub Pages）
 
 push 到 `main` 后，Actions 自动部署到 <https://zlzayn.github.io/tidytuesday/>：
-入口页（index.html）侧边栏列出所有周，iframe 默认展示最新周可视化，点击可切换历史周。
+入口页（index.html）侧边栏列出所有周，iframe 默认展示最新周可视化；点击某周在新标签打开该周报告，同时切换入口页的 iframe 预览；头部 GitHub 图标 + 用户名跳转仓库。
 
 **脚本与模板的配合关系**（`code/update_site.R` 与每周 qmd 模板互相依赖）：
 
