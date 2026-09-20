@@ -1,11 +1,13 @@
 # tidytuesday 架构说明
 
 ## 设计目标
+
 - 每周一个完整闭环：取数 → 数据检查 → 探索性可视化 → 单文件 HTML 归档 → 自动部署展示。
 - 周与周隔离：某周的依赖、改动与产物不影响历史周。
 - 产物可移植：单文件 HTML 自带样式与字体，本地双击与线上展示一致。
 
 ## 不可破坏的约束
+
 - 周目录命名 `weeks/<YYYY-MM-DD>/`：字符串排序等价时间排序，站点据此取最新周。
 - 产物固定名：`output/02_exploratory_visualization.html` 优先，缺失时回退 `output/01_data_check.html`；`code/update_site.R` 只认这两个名字。
 - 原始数据只读：`weeks/<date>/data/*.csv` 是下载快照，清洗结果另写 `output/<name>_cleaned.csv`。
@@ -13,6 +15,7 @@
 - 路径不写死：样式统一 `../../../assets/styles.css`；数据路径按 qmd 类型解析（参数化模板靠 `assets/` 根标记定位项目根，手写 qmd 用 `../data/`），与运行位置无关。
 
 ## 数据流
+
 1. `code/fetch_tt.R [日期]` 经 `tidytuesdayR` 下载 → `weeks/<date>/data/<dataset>.csv`。
 2. `01_data_check.qmd`（`params$week` 指定周次）→ 7 步质量检查 + 清洗审计 + 整洁演示 → `output/01_data_check.html` 与 `output/<dataset>_cleaned.csv`。
 3. `02_exploratory_visualization.qmd` → 图表与解读 → `output/02_exploratory_visualization.html`。
@@ -20,6 +23,7 @@
 5. `.github/workflows/deploy.yml`：push 到 main → CI 重跑 `update_site.R` → 整仓上传 GitHub Pages。
 
 ## 设计要点
+
 - 输出目录固化在 `weeks/<date>/code/_quarto.yml` 的 `output-dir: ../output`（相对配置文件目录解析），渲染命令与运行位置解耦。
 - 数据检查与可视化拆两个 qmd：质量报告与数据故事职责分离，一份失败不影响另一份。
 - `01_data_check.qmd` 是参数化通用模板：六周共用同一份检查逻辑，只改 `params$week`。
@@ -30,6 +34,7 @@
 - 页面重量按 MiB 设预算：单页 ≤ 6、单张内嵌 PNG ≤ 2；超预算先降大画幅图的 `fig-dpi`（下限 160），再减画布或分层。
 
 ## 防错清单
+
 - 改 `update_site.R` 的扫描文件名或周目录命名规则 → 必须同步每周产物名、[../weeks/README.md](../weeks/README.md) 硬编码约定段与本文件。
 - 只渲染 01 的周会以带「数据检查」标记的条目进侧边栏：站点不漏周，但访客看到的是数据检查而非可视化。
 - 根 `index.html` 由 CI 每次 push 重写：本地手改会被覆盖，展示逻辑改 `update_site.R`。

@@ -3,6 +3,7 @@
 继承根规则，见 [../AGENTS.md](../AGENTS.md)。
 
 weeks/ 特有约束：
+
 - 目录名固定 `YYYY-MM-DD`，一周一目录，不改名、不合并（站点按目录名排序取最新周）。
 - 动手前先读 [README.md](README.md)：每周流程、qmd 模板与硬编码约定都在那里。
 - `weeks/<date>/data/` 只读，清洗结果写 `weeks/<date>/output/`。
