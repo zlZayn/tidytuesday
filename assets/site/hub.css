@@ -1,0 +1,154 @@
+/* ==========================================================================
+   hub.css — 站点入口页（根 index.html）样式
+   --------------------------------------------------------------------------
+   这个文件不直接被浏览器加载：code/update_site.R 读取它，内联进
+   assets/site/index.template.html 的样式占位符，产出根 index.html。
+   （此处刻意不写出占位符的字面写法——脚本会校验替换后不残留占位符。）
+   所以改样式改这里，不要手改根 index.html（每次 CI 重跑都会被覆盖）。
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Microsoft YaHei", sans-serif;
+  background: #f5f5f7;
+  color: #1d1d1f;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- 顶栏 ---------- */
+.site-header {
+  background: #fff;
+  border-bottom: 1px solid #e5e5e7;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.brand { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+.repo-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; color: #1d1d1f; text-decoration: none;
+}
+.repo-link:hover { color: #0e8056; }
+.repo-link .who { border-bottom: 1px solid transparent; }
+.repo-link:hover .who { border-bottom-color: currentColor; }
+.tagline { font-size: 12px; color: #86868b; }
+
+/* 八爪鱼图标统一走 SVG sprite（见模板里的 <symbol id="i-octo">） */
+.octo { display: block; fill: currentColor; flex-shrink: 0; }
+
+/* ---------- 主体两栏 ---------- */
+.layout { flex: 1; display: flex; min-height: 0; }
+
+/* ---------- 左侧周列表 ---------- */
+.weeks {
+  width: 320px; flex-shrink: 0; background: #fff;
+  border-right: 1px solid #e5e5e7; padding: 18px 0; overflow-y: auto;
+}
+.weeks h2 {
+  margin: 0 0 8px; padding: 0 20px;
+  font-size: 12px; font-weight: 600; color: #86868b;
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.weeks ul { list-style: none; margin: 0; padding: 0; }
+.week { display: flex; align-items: stretch; }
+.week .tab {
+  flex: 1; min-width: 0; text-align: left; cursor: pointer;
+  font: inherit; font-size: 13px; color: #1d1d1f;
+  background: none; border: 0; border-left: 3px solid transparent;
+  padding: 9px 4px 9px 20px; transition: background .15s;
+}
+.week .tab:hover { background: #f5f5f7; }
+.week .tab[aria-selected="true"] {
+  background: #f0f0f4; border-left-color: #0e8056; font-weight: 600;
+}
+.week .tab .t {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.week .tab .d {
+  display: block; margin-top: 2px;
+  font-size: 11px; font-weight: 400; color: #86868b;
+}
+/* 每周 tab 旁边的 GitHub 八爪鱼：默认淡，hover 变实 */
+.week .src {
+  flex-shrink: 0; display: flex; align-items: center;
+  padding: 0 16px 0 8px; opacity: .3; transition: opacity .15s;
+}
+.week .src:hover, .week .src:focus-visible { opacity: 1; }
+
+/* ---------- 右侧舞台 ---------- */
+.content {
+  flex: 1; min-width: 0; padding: 18px 24px;
+  display: flex; flex-direction: column;
+}
+.meta { margin-bottom: 10px; flex-shrink: 0; display: flex; align-items: baseline; gap: 10px; }
+.meta h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.meta .date { font-size: 12px; color: #86868b; }
+
+.stage { flex: 1; position: relative; min-height: 0; }
+
+/* 每周一个面板：懒创建，只有激活的那个 display:block。
+   已加载过的面板留在 DOM 里，切回时零请求。 */
+.panel { position: absolute; inset: 0; display: none; }
+.panel[data-active="true"] { display: block; }
+.panel iframe {
+  display: block; width: 100%; height: 100%;
+  border: 1px solid #e5e5e7; border-radius: 8px; background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+}
+.panel .hint {
+  position: absolute; inset: 0; z-index: 1;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; text-align: center;
+  font-size: 14px; color: #86868b;
+  background: #fff; border: 1px solid #e5e5e7; border-radius: 8px;
+}
+.panel .hint[hidden] { display: none; }
+
+/* 首屏空态：尚未点击任何周次时显示。
+   首屏刻意不创建 iframe、不发起任何报告请求。 */
+.stage > .empty {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; text-align: center;
+  font-size: 14px; color: #86868b;
+  border: 1px dashed #d2d2d7; border-radius: 8px; background: #fff;
+}
+.stage > .empty[hidden] { display: none; }
+
+/* ---------- 页脚 ---------- */
+.site-footer {
+  padding: 12px; text-align: center; font-size: 12px; color: #86868b;
+  background: #fff; border-top: 1px solid #e5e5e7;
+}
+
+/* ---------- 窄屏：左栏折成横向滚动条 ---------- */
+@media (max-width: 760px) {
+  .layout { flex-direction: column; }
+  .weeks {
+    width: auto; border-right: 0; border-bottom: 1px solid #e5e5e7;
+    padding: 0; max-height: 42vh;
+  }
+  .weeks h2 { display: none; }
+  .weeks ul { display: flex; overflow-x: auto; }
+  .week { flex-shrink: 0; border-right: 1px solid #e5e5e7; }
+  .week .tab { padding: 10px 14px; border-left: 0; border-bottom: 3px solid transparent; }
+  .week .tab[aria-selected="true"] { border-left: 0; border-bottom-color: #0e8056; }
+  .week .tab .t { max-width: 60vw; }
+  .week .src { padding: 0 12px 0 0; }
+  .content { padding: 14px; }
+  .stage { min-height: 60vh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}

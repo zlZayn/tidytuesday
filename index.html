@@ -4,110 +4,365 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TidyTuesday Visualization Hub</title>
+<!--
+  ============================================================================
+  本文件是模板，不是产物。真正的根 index.html 由 code/update_site.R 读取本文件、
+  替换四个占位符后生成（每次 push 后 CI 重跑，手改根 index.html 会被覆盖）：
+
+    HUB_CSS    <- assets/site/hub.css   内容
+    HUB_DATA   <- 各周 {date,title,kind,src,repo} 的 JSON
+    HUB_JS     <- assets/site/hub.js    内容
+    REPO_URL   <- 仓库地址（头部 GitHub 链接）
+
+  四个占位符在模板里写成「at-at 包裹」的形式，不用双花括号，避免与 CSS/JS 的
+  大量花括号混淆。
+  ⚠ 本注释刻意不写出占位符的字面写法：替换是全局的（gsub 替换所有出现），
+    注释里若出现字面占位符，会被一并替换成 CSS/JS/JSON 正文，把注释撑爆并重复内容。
+    脚本另有「每个占位符必须恰好出现一次」的硬校验来兜住这类事故。
+  ============================================================================
+-->
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    background: #f5f5f7; color: #1d1d1f; min-height: 100vh; display: flex; flex-direction: column;
+/* ==========================================================================
+   hub.css — 站点入口页（根 index.html）样式
+   --------------------------------------------------------------------------
+   这个文件不直接被浏览器加载：code/update_site.R 读取它，内联进
+   assets/site/index.template.html 的样式占位符，产出根 index.html。
+   （此处刻意不写出占位符的字面写法——脚本会校验替换后不残留占位符。）
+   所以改样式改这里，不要手改根 index.html（每次 CI 重跑都会被覆盖）。
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Microsoft YaHei", sans-serif;
+  background: #f5f5f7;
+  color: #1d1d1f;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- 顶栏 ---------- */
+.site-header {
+  background: #fff;
+  border-bottom: 1px solid #e5e5e7;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.brand { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
+.repo-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; color: #1d1d1f; text-decoration: none;
+}
+.repo-link:hover { color: #0e8056; }
+.repo-link .who { border-bottom: 1px solid transparent; }
+.repo-link:hover .who { border-bottom-color: currentColor; }
+.tagline { font-size: 12px; color: #86868b; }
+
+/* 八爪鱼图标统一走 SVG sprite（见模板里的 <symbol id="i-octo">） */
+.octo { display: block; fill: currentColor; flex-shrink: 0; }
+
+/* ---------- 主体两栏 ---------- */
+.layout { flex: 1; display: flex; min-height: 0; }
+
+/* ---------- 左侧周列表 ---------- */
+.weeks {
+  width: 320px; flex-shrink: 0; background: #fff;
+  border-right: 1px solid #e5e5e7; padding: 18px 0; overflow-y: auto;
+}
+.weeks h2 {
+  margin: 0 0 8px; padding: 0 20px;
+  font-size: 12px; font-weight: 600; color: #86868b;
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.weeks ul { list-style: none; margin: 0; padding: 0; }
+.week { display: flex; align-items: stretch; }
+.week .tab {
+  flex: 1; min-width: 0; text-align: left; cursor: pointer;
+  font: inherit; font-size: 13px; color: #1d1d1f;
+  background: none; border: 0; border-left: 3px solid transparent;
+  padding: 9px 4px 9px 20px; transition: background .15s;
+}
+.week .tab:hover { background: #f5f5f7; }
+.week .tab[aria-selected="true"] {
+  background: #f0f0f4; border-left-color: #0e8056; font-weight: 600;
+}
+.week .tab .t {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.week .tab .d {
+  display: block; margin-top: 2px;
+  font-size: 11px; font-weight: 400; color: #86868b;
+}
+/* 每周 tab 旁边的 GitHub 八爪鱼：默认淡，hover 变实 */
+.week .src {
+  flex-shrink: 0; display: flex; align-items: center;
+  padding: 0 16px 0 8px; opacity: .3; transition: opacity .15s;
+}
+.week .src:hover, .week .src:focus-visible { opacity: 1; }
+
+/* ---------- 右侧舞台 ---------- */
+.content {
+  flex: 1; min-width: 0; padding: 18px 24px;
+  display: flex; flex-direction: column;
+}
+.meta { margin-bottom: 10px; flex-shrink: 0; display: flex; align-items: baseline; gap: 10px; }
+.meta h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.meta .date { font-size: 12px; color: #86868b; }
+
+.stage { flex: 1; position: relative; min-height: 0; }
+
+/* 每周一个面板：懒创建，只有激活的那个 display:block。
+   已加载过的面板留在 DOM 里，切回时零请求。 */
+.panel { position: absolute; inset: 0; display: none; }
+.panel[data-active="true"] { display: block; }
+.panel iframe {
+  display: block; width: 100%; height: 100%;
+  border: 1px solid #e5e5e7; border-radius: 8px; background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+}
+.panel .hint {
+  position: absolute; inset: 0; z-index: 1;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; text-align: center;
+  font-size: 14px; color: #86868b;
+  background: #fff; border: 1px solid #e5e5e7; border-radius: 8px;
+}
+.panel .hint[hidden] { display: none; }
+
+/* 首屏空态：尚未点击任何周次时显示。
+   首屏刻意不创建 iframe、不发起任何报告请求。 */
+.stage > .empty {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; text-align: center;
+  font-size: 14px; color: #86868b;
+  border: 1px dashed #d2d2d7; border-radius: 8px; background: #fff;
+}
+.stage > .empty[hidden] { display: none; }
+
+/* ---------- 页脚 ---------- */
+.site-footer {
+  padding: 12px; text-align: center; font-size: 12px; color: #86868b;
+  background: #fff; border-top: 1px solid #e5e5e7;
+}
+
+/* ---------- 窄屏：左栏折成横向滚动条 ---------- */
+@media (max-width: 760px) {
+  .layout { flex-direction: column; }
+  .weeks {
+    width: auto; border-right: 0; border-bottom: 1px solid #e5e5e7;
+    padding: 0; max-height: 42vh;
   }
-  header {
-    background: #fff; border-bottom: 1px solid #e5e5e7; padding: 16px 28px;
-    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
-  }
-  header .brand { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-  header h1 { font-size: 18px; font-weight: 700; }
-  header .gh { display: inline-flex; align-items: center; gap: 6px; color: #1d1d1f;
-             text-decoration: none; font-size: 13px; font-weight: 600; }
-  header .gh:hover { color: #0e8056; }
-  header .gh .octo { display: block; }
-  header .gh .who { border-bottom: 1px solid transparent; }
-  header .gh:hover .who { border-bottom-color: currentColor; }
-  header .tag { font-size: 12px; color: #86868b; }
-  main { flex: 1; display: flex; min-height: 0; }
-  aside {
-    width: 260px; background: #fff; border-right: 1px solid #e5e5e7;
-    padding: 20px 0; overflow-y: auto; flex-shrink: 0;
-  }
-  aside h2 { font-size: 12px; color: #86868b; text-transform: uppercase; letter-spacing: .05em;
-             padding: 0 24px 8px; }
-  aside ul { list-style: none; }
-  aside li a {
-    display: block; padding: 9px 24px; font-size: 13px; color: #1d1d1f;
-    text-decoration: none; border-left: 3px solid transparent; transition: all .15s;
-  }
-  aside li a:hover { background: #f5f5f7; }
-  aside li a.active { background: #f0f0f4; border-left-color: #0e8056; font-weight: 600; }
-  aside li .date { font-size: 11px; color: #86868b; margin-left: 6px; }
-  aside li .kind { font-size: 10px; color: #0e8056; border: 1px solid #b7d8c9;
-                   border-radius: 3px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }
-  .content { flex: 1; padding: 20px 28px; min-width: 0; display: flex; flex-direction: column; }
-  .content .meta { margin-bottom: 12px; }
-  .content .meta h3 { font-size: 15px; font-weight: 600; }
-  .content .meta .date { font-size: 12px; color: #86868b; }
-  iframe {
-    flex: 1; width: 100%; border: 1px solid #e5e5e7; border-radius: 8px;
-    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.06); min-height: 600px;
-  }
-  footer { text-align: center; padding: 14px; font-size: 12px; color: #86868b; background: #fff;
-           border-top: 1px solid #e5e5e7; }
+  .weeks h2 { display: none; }
+  .weeks ul { display: flex; overflow-x: auto; }
+  .week { flex-shrink: 0; border-right: 1px solid #e5e5e7; }
+  .week .tab { padding: 10px 14px; border-left: 0; border-bottom: 3px solid transparent; }
+  .week .tab[aria-selected="true"] { border-left: 0; border-bottom-color: #0e8056; }
+  .week .tab .t { max-width: 60vw; }
+  .week .src { padding: 0 12px 0 0; }
+  .content { padding: 14px; }
+  .stage { min-height: 60vh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
 </style>
 </head>
 <body>
-<header>
+
+<!-- 八爪鱼图标定义一次，两处 <use> 复用 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-octo" viewBox="0 0 16 16">
+    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+  </symbol>
+</svg>
+
+<header class="site-header">
   <div class="brand">
     <h1>TidyTuesday Visualization Hub</h1>
-    <a class="gh" href="https://github.com/zlZayn/tidytuesday" target="_blank" rel="noopener" title="zlZayn / tidytuesday">
-      <svg class="octo" width="20" height="20" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+    <a class="repo-link" href="https://github.com/zlZayn/tidytuesday" target="_blank" rel="noopener" title="zlZayn / tidytuesday">
+      <svg class="octo" width="20" height="20" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-octo"></use></svg>
       <span class="who">zlZayn</span>
     </a>
   </div>
-  <span class="tag">每周 R 数据可视化 · 自动部署 GitHub Pages</span>
+  <span class="tagline">每周 R 数据可视化 · 点击左侧周次按需加载 · 自动部署</span>
 </header>
-<main>
-  <aside>
+
+<div class="layout">
+  <nav class="weeks" aria-label="周次列表">
     <h2>Weekly Reports</h2>
-    <ul>
-<li><a href="./weeks/2026-09-15/output/02_exploratory_visualization.html" target="_blank" rel="noopener" onclick="loadViz(this)">死海古卷的洞穴档案 探索性可视化</a> <span class="date">2026-09-15</span></li>
-<li><a href="./weeks/2026-09-08/output/02_exploratory_visualization.html" target="_blank" rel="noopener" onclick="loadViz(this)">卡布奇诺指数：一杯咖啡要干多久</a> <span class="date">2026-09-08</span></li>
-<li><a href="./weeks/2026-09-01/output/02_exploratory_visualization.html" target="_blank" rel="noopener" onclick="loadViz(this)">世界城堡 探索性可视化</a> <span class="date">2026-09-01</span></li>
-<li><a href="./weeks/2026-08-25/output/02_exploratory_visualization.html" target="_blank" rel="noopener" onclick="loadViz(this)">乡村音乐词曲作者生态：榜单长尾与歌词词频</a> <span class="date">2026-08-25</span></li>
-<li><a href="./weeks/2026-08-18/output/02_exploratory_visualization.html" target="_blank" rel="noopener" onclick="loadViz(this)">IELTS 考生构成与成绩 探索性可视化</a> <span class="date">2026-08-18</span></li>
-<li><a href="./weeks/2026-08-11/output/02_exploratory_visualization.html" target="_blank" rel="noopener" onclick="loadViz(this)">Palomar 星系光谱 探索性可视化</a> <span class="date">2026-08-11</span></li>
-<li><a href="./weeks/2026-08-04/output/02_exploratory_visualization.html" target="_blank" rel="noopener" onclick="loadViz(this)">Basotho Wool 探索性可视化</a> <span class="date">2026-08-04</span></li>
-</ul>
-  </aside>
+    <ul id="weeks-list"></ul>
+  </nav>
+
   <div class="content">
     <div class="meta">
-      <h3 id="viz-title">
-死海古卷的洞穴档案 探索性可视化
-</h3>
-      <span class="date" id="viz-date">
-2026-09-15
-</span>
+      <h3 id="viz-title"></h3>
+      <span class="date" id="viz-date"></span>
     </div>
-    <iframe id="viz-frame" src="
-./weeks/2026-09-15/output/02_exploratory_visualization.html
-" title="可视化"></iframe>
+    <!-- 面板在首次点击某个 tab 时才插入这里；首屏只有空态提示，
+         不创建 iframe，也不产生任何报告请求 -->
+    <div class="stage" id="stage">
+      <div class="empty" id="stage-empty">从左侧选择一个周次，加载该周报告</div>
+    </div>
   </div>
-</main>
-<footer>自动生成于 
-2026-09-20
- · 由 update_site.R 维护 · 共 
-7
- 周</footer>
+</div>
+
+<footer class="site-footer" id="hub-foot"></footer>
+
+<script type="application/json" id="hub-data">
+{
+  "generated": "2026-09-27",
+  "repo": "https://github.com/zlZayn/tidytuesday",
+  "weeks": [
+    { "date": "2026-09-15", "title": "死海古卷的洞穴档案 探索性可视化", "kind": "", "src": "./weeks/2026-09-15/output/02_exploratory_visualization.html", "repo": "https://github.com/zlZayn/tidytuesday/tree/main/weeks/2026-09-15" },
+    { "date": "2026-09-08", "title": "卡布奇诺指数：一杯咖啡要干多久", "kind": "", "src": "./weeks/2026-09-08/output/02_exploratory_visualization.html", "repo": "https://github.com/zlZayn/tidytuesday/tree/main/weeks/2026-09-08" },
+    { "date": "2026-09-01", "title": "世界城堡 探索性可视化", "kind": "", "src": "./weeks/2026-09-01/output/02_exploratory_visualization.html", "repo": "https://github.com/zlZayn/tidytuesday/tree/main/weeks/2026-09-01" },
+    { "date": "2026-08-25", "title": "乡村音乐词曲作者生态：榜单长尾与歌词词频", "kind": "", "src": "./weeks/2026-08-25/output/02_exploratory_visualization.html", "repo": "https://github.com/zlZayn/tidytuesday/tree/main/weeks/2026-08-25" },
+    { "date": "2026-08-18", "title": "IELTS 考生构成与成绩 探索性可视化", "kind": "", "src": "./weeks/2026-08-18/output/02_exploratory_visualization.html", "repo": "https://github.com/zlZayn/tidytuesday/tree/main/weeks/2026-08-18" },
+    { "date": "2026-08-11", "title": "Palomar 星系光谱 探索性可视化", "kind": "", "src": "./weeks/2026-08-11/output/02_exploratory_visualization.html", "repo": "https://github.com/zlZayn/tidytuesday/tree/main/weeks/2026-08-11" },
+    { "date": "2026-08-04", "title": "Basotho Wool 探索性可视化", "kind": "", "src": "./weeks/2026-08-04/output/02_exploratory_visualization.html", "repo": "https://github.com/zlZayn/tidytuesday/tree/main/weeks/2026-08-04" }
+  ]
+}
+</script>
+
 <script>
-  function loadViz(link) {
-    document.getElementById("viz-frame").src = link.getAttribute("href");
-    document.querySelectorAll("aside a").forEach(a => a.classList.remove("active"));
-    link.classList.add("active");
-    document.getElementById("viz-title").textContent = link.childNodes[0].textContent.trim();
-    const dateSpan = link.querySelector(".date");
-    document.getElementById("viz-date").textContent = dateSpan ? dateSpan.textContent.trim() : "";
+/* ==========================================================================
+   hub.js — 站点入口页（根 index.html）的 tab 与按需加载逻辑
+   --------------------------------------------------------------------------
+   这个文件不直接被浏览器加载：code/update_site.R 读取它，内联进
+   assets/site/index.template.html 的脚本占位符，产出根 index.html。
+   （此处刻意不写出占位符的字面写法——脚本会校验替换后不残留占位符。）
+
+   加载策略（方案 B：多文件 + 按需加载）：
+     - 首屏只建左侧 tab 列表，不创建任何 iframe，因此不产生任何报告请求。
+     - 点某个 tab 时，若该周面板还没建，才创建 <iframe> 并设 src，只下载那一周。
+     - 已创建的面板留在 DOM 中，切回只切 data-active，零请求。
+   ========================================================================== */
+(function () {
+  "use strict";
+
+  var data = JSON.parse(document.getElementById("hub-data").textContent);
+  var weeks = data.weeks;
+
+  var listEl = document.getElementById("weeks-list");
+  var stageEl = document.getElementById("stage");
+  var emptyEl = document.getElementById("stage-empty");
+  var titleEl = document.getElementById("viz-title");
+  var dateEl = document.getElementById("viz-date");
+  var footEl = document.getElementById("hub-foot");
+
+  var OCTO = '<svg class="octo" width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">' +
+             '<use href="#i-octo"></use></svg>';
+
+  /* 面板表：i -> { panel, frame }
+     只读缓存，用来判断「已建则切显隐、未建才创建」。 */
+  var panels = {};
+
+  function el(tag, cls) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    return n;
   }
-  document.addEventListener("DOMContentLoaded", () => {
-    const first = document.querySelector("aside a");
-    if (first) first.classList.add("active");
-  });
+
+  /* 建左侧一个条目：可点的 tab + 独立的 GitHub 八爪鱼链接 */
+  function buildWeek(week, index) {
+    var li = el("li", "week");
+
+    var tab = el("button", "tab");
+    tab.type = "button";
+    tab.setAttribute("aria-selected", "false");
+    tab.setAttribute("aria-controls", "panel-" + index);
+
+    var t = el("span", "t");
+    t.textContent = week.title + (week.kind ? " · " + week.kind : "");
+    var d = el("span", "d");
+    d.textContent = week.date;
+    tab.appendChild(t);
+    tab.appendChild(d);
+    tab.addEventListener("click", function () { activate(index); });
+    li.appendChild(tab);
+
+    /* 每周 tab 旁边的 GitHub 八爪鱼：指向该周目录，不参与 tab 切换 */
+    var src = el("a", "src");
+    src.href = week.repo;
+    src.target = "_blank";
+    src.rel = "noopener";
+    src.title = week.date + " 的源码与产物（GitHub）";
+    src.setAttribute("aria-label", week.date + " 在 GitHub 上的目录");
+    src.innerHTML = OCTO;
+    li.appendChild(src);
+
+    listEl.appendChild(li);
+    return tab;
+  }
+
+  function activate(index) {
+    var week = weeks[index];
+
+    /* 顶部标题与日期 */
+    titleEl.textContent = week.title + (week.kind ? " · " + week.kind : "");
+    dateEl.textContent = week.date;
+
+    /* 首屏空态让位给面板 */
+    if (emptyEl) { emptyEl.hidden = true; }
+
+    /* 左侧高亮 */
+    var tabs = listEl.querySelectorAll(".tab");
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].setAttribute("aria-selected", i === index ? "true" : "false");
+    }
+
+    /* 首次点击才创建 iframe —— 此前该周不产生任何网络请求 */
+    var entry = panels[index];
+    if (!entry) {
+      var panel = el("div", "panel");
+      panel.id = "panel-" + index;
+
+      var hint = el("div", "hint");
+      hint.textContent = "正在加载 " + week.date + "（" + week.title + "）…";
+      panel.appendChild(hint);
+
+      var frame = document.createElement("iframe");
+      frame.title = week.title;
+      frame.loading = "eager";
+      /* 只隐藏提示，不动 iframe 本身：
+         在 load 回调里替换/移除 iframe 节点会触发重复加载甚至无限循环。 */
+      frame.addEventListener("load", function () { hint.hidden = true; }, { once: true });
+
+      panel.appendChild(frame);
+      stageEl.appendChild(panel);
+      frame.src = week.src;   /* 赋值 src 的这一刻才真正发起请求 */
+
+      entry = panels[index] = { panel: panel, frame: frame };
+    }
+
+    /* 只切显隐：已加载过的周留在 DOM，切回不重新请求 */
+    for (var k in panels) {
+      if (Object.prototype.hasOwnProperty.call(panels, k)) {
+        panels[k].panel.setAttribute("data-active", String(Number(k) === index));
+      }
+    }
+  }
+
+  weeks.forEach(buildWeek);
+
+  footEl.textContent = "共 " + weeks.length + " 周 · 报告按需加载 · " +
+                       "自动生成于 " + data.generated + " · 由 code/update_site.R 维护";
+
+  /* 刻意不在此处调用 activate()：
+     首屏只渲染周列表，不创建 iframe，因此不产生任何报告请求。
+     用户点击某个周次时才加载那一周。 */
+})();
 </script>
 </body>
 </html>

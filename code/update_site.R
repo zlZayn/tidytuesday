@@ -1,29 +1,81 @@
 # ==============================================================================
-# update_site.R - 生成 GitHub Pages 入口页 index.html
+# update_site.R - 生成站点入口页 index.html
 # ------------------------------------------------------------------------------
 # 用法: Rscript code/update_site.R
 #
 # 行为:
 #   1. 扫描 weeks/<date>/output/：优先取 02_exploratory_visualization.html，
-#      缺失时回退 01_data_check.html（保证每一周都进侧边栏）
-#   2. 按目录名排序（新 -> 旧），最新周作为默认展示（iframe 嵌入）
-#   3. 生成 index.html（含全部周链接列表）到项目根目录
+#      缺失时回退 01_data_check.html（保证每一周都进周列表）
+#   2. 按目录名排序（新 -> 旧），最新周为默认展开项
+#   3. 读取 assets/site/ 下的模板与静态资源，替换占位符，写出根 index.html
+#
+# 入口页只是「tab 壳」：首屏不含任何 iframe，也不产生任何报告请求；
+# 点击某个周次时，浏览器才创建该周的 iframe 并设 src，只下载那一周。
 # ------------------------------------------------------------------------------
 # ⚠ 硬编码约定（本脚本与每周 qmd 模板互相配合，改动任一侧都会破坏部署）:
 #   1. 可视化产物固定名: weeks/<date>/output/02_exploratory_visualization.html
 #      - 来自 qmd 模板: 每周渲染 02_exploratory_visualization.qmd 得到同名 html
 #   2. 回退产物固定名: weeks/<date>/output/01_data_check.html
-#      - 该周没有 02 时以它进侧边栏，条目带「数据检查」标记
+#      - 该周没有 02 时以它进列表，条目带「数据检查」标记
 #   3. 周目录命名: weeks/<YYYY-MM-DD>/（字符串排序即时间排序）
 #      - 最新周 = 目录名最大的那一个
-#   4. 每周流程: 渲染出 HTML 后 push 即可，下次部署自动重扫目录，无需改动脚本
-#   若改模板文件名或目录结构，必须同步改这里。
+#   4. 入口页模板与静态资源固定名: assets/site/index.template.html
+#                                  assets/site/hub.css
+#                                  assets/site/hub.js
+#      - 模板占位符: @@HUB_CSS@@ / @@HUB_DATA@@ / @@HUB_JS@@ / @@REPO_URL@@
+#      - 用 @@NAME@@ 而不是 {{NAME}}，避免与 CSS/JS 的大量花括号混淆
+#   5. 每周流程: 渲染出 HTML 后 push 即可，下次部署自动重扫目录，无需改脚本
+#   若改模板文件名、占位符或目录结构，必须同步改这里。
 # ------------------------------------------------------------------------------
 # 依赖: 无第三方包，纯 base R
 # ==============================================================================
 
 VIZ_FILE <- "02_exploratory_visualization.html"
 CHECK_FILE <- "01_data_check.html"
+
+TEMPLATE <- "assets/site/index.template.html"
+HUB_CSS <- "assets/site/hub.css"
+HUB_JS <- "assets/site/hub.js"
+
+REPO_URL <- "https://github.com/zlZayn/tidytuesday"
+REPO_BRANCH <- "main"
+
+# ------------------------------------------------------------------------------
+# 0. 工具函数
+# ------------------------------------------------------------------------------
+
+# 把任意字符串转成 JSON 字符串字面量（含引号）
+# 转义顺序：反斜杠必须最先处理，否则会二次转义
+json_str <- function(x) {
+  x <- gsub("\\", "\\\\", x, fixed = TRUE)
+  x <- gsub("\"", "\\\"", x, fixed = TRUE)
+  x <- gsub("\n", "\\n", x, fixed = TRUE)
+  x <- gsub("\r", "\\r", x, fixed = TRUE)
+  x <- gsub("\t", "\\t", x, fixed = TRUE)
+  # 防止标题里的 </script> 提前闭合承载 JSON 的 script 标签
+  x <- gsub("</", "<\\/", x, fixed = TRUE)
+  paste0("\"", x, "\"")
+}
+
+read_text <- function(path, what) {
+  if (!file.exists(path)) {
+    stop(sprintf("缺少 %s：%s（模板与静态资源是入口页生成的输入）", what, path))
+  }
+  paste(readLines(path, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+}
+
+# 从 html 的 <title> 取标题，取不到则退回目录名
+get_title <- function(html_path) {
+  raw <- readLines(html_path, warn = FALSE)
+  html_txt <- paste(raw, collapse = "\n")
+  m <- regexpr("<title>[^<]*</title>", html_txt)
+  if (m[1] > 0) {
+    t <- regmatches(html_txt, m)
+    trimws(gsub("</?title>", "", t))
+  } else {
+    basename(dirname(dirname(html_path)))
+  }
+}
 
 # ------------------------------------------------------------------------------
 # 1. 扫描各周产物（02 优先，回退 01）
@@ -32,12 +84,10 @@ week_dirs <- list.dirs("weeks", recursive = FALSE, full.names = TRUE)
 weeks <- character(0)
 files <- character(0)
 for (d in week_dirs) {
-  viz <- file.path(d, "output", VIZ_FILE)
-  chk <- file.path(d, "output", CHECK_FILE)
-  if (file.exists(viz)) {
+  if (file.exists(file.path(d, "output", VIZ_FILE))) {
     weeks <- c(weeks, d)
     files <- c(files, VIZ_FILE)
-  } else if (file.exists(chk)) {
+  } else if (file.exists(file.path(d, "output", CHECK_FILE))) {
     weeks <- c(weeks, d)
     files <- c(files, CHECK_FILE)
   }
@@ -52,144 +102,95 @@ weeks <- weeks[ord]
 files <- files[ord]
 
 # ------------------------------------------------------------------------------
-# 2. 提取每周标题（从 html 的 <title>）
+# 2. 组装每周一条数据（date / title / kind / src / repo）
 # ------------------------------------------------------------------------------
-get_title <- function(html_path) {
-  raw <- readLines(html_path, warn = FALSE)
-  html_txt <- paste(raw, collapse = "\n")
-  m <- regexpr("<title>[^<]*</title>", html_txt)
-  if (m[1] > 0) {
-    t <- regmatches(html_txt, m)
-    gsub("</?title>", "", t)
-  } else {
-    basename(dirname(dirname(html_path)))
-  }
-}
+dates <- basename(weeks)
+titles <- vapply(seq_along(weeks), function(i) {
+  get_title(file.path(weeks[i], "output", files[i]))
+}, character(1))
+kinds <- ifelse(files == VIZ_FILE, "", "数据检查")
 
-# 相对路径：index.html 在根目录，到每周 html 的相对路径
-rel_out <- function(week_dir, file_name) {
-  file.path(basename("."), week_dir, "output", file_name)
-}
+# 路径一律用正斜杠：这是 URL，不是文件系统路径
+srcs <- sprintf("./weeks/%s/output/%s", dates, files)
+repos <- sprintf("%s/tree/%s/weeks/%s", REPO_URL, REPO_BRANCH, dates)
 
-links <- vapply(seq_along(weeks), function(i) {
-  d <- weeks[i]
-  path <- file.path(d, "output", files[i])
-  title <- get_title(path)
-  date_str <- basename(d)
-  kind <- if (identical(files[i], VIZ_FILE)) "" else ' <span class="kind">数据检查</span>'
+week_json <- vapply(seq_along(dates), function(i) {
   sprintf(
-    '<li><a href="%s" target="_blank" rel="noopener" onclick="loadViz(this)">%s%s</a> <span class="date">%s</span></li>',
-    rel_out(d, files[i]), title, kind, date_str
+    '    { "date": %s, "title": %s, "kind": %s, "src": %s, "repo": %s }',
+    json_str(dates[i]), json_str(titles[i]), json_str(kinds[i]),
+    json_str(srcs[i]), json_str(repos[i])
   )
 }, character(1))
 
-latest_viz <- rel_out(weeks[1], files[1])
-latest_title <- get_title(file.path(weeks[1], "output", files[1]))
-latest_date <- basename(weeks[1])
-
-# ------------------------------------------------------------------------------
-# 3. 生成 index.html（用 paste 拼接，避免 sprintf 解析 CSS 中的 %）
-# ------------------------------------------------------------------------------
-parts <- c(
-  '<!DOCTYPE html>',
-  '<html lang="zh-CN">',
-  '<head>',
-  '<meta charset="UTF-8">',
-  '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
-  '<title>TidyTuesday Visualization Hub</title>',
-  '<style>',
-  '  * { box-sizing: border-box; margin: 0; padding: 0; }',
-  '  body {',
-  '    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;',
-  '    background: #f5f5f7; color: #1d1d1f; min-height: 100vh; display: flex; flex-direction: column;',
-  '  }',
-  '  header {',
-  '    background: #fff; border-bottom: 1px solid #e5e5e7; padding: 16px 28px;',
-  '    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;',
-  '  }',
-  '  header .brand { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }',
-  '  header h1 { font-size: 18px; font-weight: 700; }',
-  '  header .gh { display: inline-flex; align-items: center; gap: 6px; color: #1d1d1f;',
-  '             text-decoration: none; font-size: 13px; font-weight: 600; }',
-  '  header .gh:hover { color: #0e8056; }',
-  '  header .gh .octo { display: block; }',
-  '  header .gh .who { border-bottom: 1px solid transparent; }',
-  '  header .gh:hover .who { border-bottom-color: currentColor; }',
-  '  header .tag { font-size: 12px; color: #86868b; }',
-  '  main { flex: 1; display: flex; min-height: 0; }',
-  '  aside {',
-  '    width: 260px; background: #fff; border-right: 1px solid #e5e5e7;',
-  '    padding: 20px 0; overflow-y: auto; flex-shrink: 0;',
-  '  }',
-  '  aside h2 { font-size: 12px; color: #86868b; text-transform: uppercase; letter-spacing: .05em;',
-  '             padding: 0 24px 8px; }',
-  '  aside ul { list-style: none; }',
-  '  aside li a {',
-  '    display: block; padding: 9px 24px; font-size: 13px; color: #1d1d1f;',
-  '    text-decoration: none; border-left: 3px solid transparent; transition: all .15s;',
-  '  }',
-  '  aside li a:hover { background: #f5f5f7; }',
-  '  aside li a.active { background: #f0f0f4; border-left-color: #0e8056; font-weight: 600; }',
-  '  aside li .date { font-size: 11px; color: #86868b; margin-left: 6px; }',
-  '  aside li .kind { font-size: 10px; color: #0e8056; border: 1px solid #b7d8c9;',
-  '                   border-radius: 3px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }',
-  '  .content { flex: 1; padding: 20px 28px; min-width: 0; display: flex; flex-direction: column; }',
-  '  .content .meta { margin-bottom: 12px; }',
-  '  .content .meta h3 { font-size: 15px; font-weight: 600; }',
-  '  .content .meta .date { font-size: 12px; color: #86868b; }',
-  '  iframe {',
-  '    flex: 1; width: 100%; border: 1px solid #e5e5e7; border-radius: 8px;',
-  '    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.06); min-height: 600px;',
-  '  }',
-  '  footer { text-align: center; padding: 14px; font-size: 12px; color: #86868b; background: #fff;',
-  '           border-top: 1px solid #e5e5e7; }',
-  '</style>',
-  '</head>',
-  '<body>',
-  '<header>',
-  '  <div class="brand">',
-  '    <h1>TidyTuesday Visualization Hub</h1>',
-  '    <a class="gh" href="https://github.com/zlZayn/tidytuesday" target="_blank" rel="noopener" title="zlZayn / tidytuesday">',
-  '      <svg class="octo" width="20" height="20" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>',
-  '      <span class="who">zlZayn</span>',
-  '    </a>',
-  '  </div>',
-  '  <span class="tag">每周 R 数据可视化 · 自动部署 GitHub Pages</span>',
-  '</header>',
-  '<main>',
-  '  <aside>',
-  '    <h2>Weekly Reports</h2>',
-  '    <ul>', paste(links, collapse = "\n"), '</ul>',
-  '  </aside>',
-  '  <div class="content">',
-  '    <div class="meta">',
-  '      <h3 id="viz-title">', latest_title, '</h3>',
-  '      <span class="date" id="viz-date">', latest_date, '</span>',
-  '    </div>',
-  '    <iframe id="viz-frame" src="', latest_viz, '" title="可视化"></iframe>',
-  '  </div>',
-  '</main>',
-  '<footer>自动生成于 ', format(Sys.Date(), "%Y-%m-%d"), ' · 由 update_site.R 维护 · 共 ', length(weeks), ' 周</footer>',
-  '<script>',
-  '  function loadViz(link) {',
-  '    document.getElementById("viz-frame").src = link.getAttribute("href");',
-  '    document.querySelectorAll("aside a").forEach(a => a.classList.remove("active"));',
-  '    link.classList.add("active");',
-  '    document.getElementById("viz-title").textContent = link.childNodes[0].textContent.trim();',
-  '    const dateSpan = link.querySelector(".date");',
-  '    document.getElementById("viz-date").textContent = dateSpan ? dateSpan.textContent.trim() : "";',
-  '  }',
-  '  document.addEventListener("DOMContentLoaded", () => {',
-  '    const first = document.querySelector("aside a");',
-  '    if (first) first.classList.add("active");',
-  '  });',
-  '</script>',
-  '</body>',
-  '</html>'
+hub_data <- paste0(
+  "{\n",
+  '  "generated": ', json_str(format(Sys.Date(), "%Y-%m-%d")), ",\n",
+  '  "repo": ', json_str(REPO_URL), ",\n",
+  '  "weeks": [\n', paste(week_json, collapse = ",\n"), "\n  ]\n",
+  "}"
 )
 
-writeLines(parts, "index.html", useBytes = TRUE)
-cat("==> index.html 已生成\n")
-cat("    收录周数:", length(weeks), "（可视化", sum(files == VIZ_FILE), "· 数据检查回退", sum(files == CHECK_FILE), "）\n")
-cat("    最新周:", latest_date, "-", latest_title, "\n")
-cat("    历史周:", length(weeks) - 1, "个\n")
+# ------------------------------------------------------------------------------
+# 3. 读模板与静态资源，替换占位符
+# ------------------------------------------------------------------------------
+template <- read_text(TEMPLATE, "入口页模板")
+hub_css <- read_text(HUB_CSS, "入口页样式")
+hub_js <- read_text(HUB_JS, "入口页脚本")
+
+# 固定字符串替换（fixed = TRUE），避免 CSS/JS 里的正则元字符被解释
+fill <- function(text, key, value) gsub(key, value, text, fixed = TRUE)
+
+# 先校验模板，且必须在注入之前查：
+#   1) 出现的占位符必须都在已知集合内（防止拼错名字，静默漏填）
+#   2) 每个占位符必须恰好出现一次
+#      —— 替换是全局的（gsub 替换所有出现）。若占位符在模板里出现两次
+#      （例如写进了解释性注释），整份 CSS/JS/JSON 会被塞两遍，产出体积翻倍且
+#      结构错乱，而页面仍能打开，属于最难发现的静默故障。
+#   3) 注入内容（hub.css / hub.js）的注释里也会出现占位符字样，所以这一检查
+#      必须针对注入前的模板，注入之后再扫就没有意义了。
+known <- c("@@HUB_CSS@@", "@@HUB_DATA@@", "@@HUB_JS@@", "@@REPO_URL@@")
+found <- regmatches(template, gregexpr("@@[A-Z_]+@@", template))[[1]]
+
+unknown <- setdiff(unique(found), known)
+if (length(unknown) > 0) {
+  stop(sprintf("模板里有未知占位符: %s", paste(unknown, collapse = ", ")))
+}
+
+counts <- table(found)
+dup <- names(counts)[counts > 1]
+if (length(dup) > 0) {
+  stop(sprintf("模板里占位符重复出现（内容会被注入多次）: %s",
+               paste(sprintf("%s x%d", dup, counts[dup]), collapse = ", ")))
+}
+
+missing <- setdiff(known, unique(found))
+if (length(missing) > 0) {
+  stop(sprintf("模板缺少占位符: %s", paste(missing, collapse = ", ")))
+}
+
+out <- template
+out <- fill(out, "@@HUB_CSS@@", hub_css)
+out <- fill(out, "@@HUB_DATA@@", hub_data)
+out <- fill(out, "@@HUB_JS@@", hub_js)
+out <- fill(out, "@@REPO_URL@@", REPO_URL)
+
+# 替换后不应再残留任何占位符
+if (length(regmatches(out, gregexpr("@@[A-Z_]+@@", out))[[1]]) > 0) {
+  stop("替换后仍残留占位符，模板或替换键不一致")
+}
+
+# ------------------------------------------------------------------------------
+# 4. 写出 index.html
+# ------------------------------------------------------------------------------
+writeLines(strsplit(out, "\n", fixed = TRUE)[[1]], "index.html", useBytes = TRUE)
+
+# ------------------------------------------------------------------------------
+# 5. 渲染日志（只进 stdout，不进 HTML）
+# ------------------------------------------------------------------------------
+cat(sprintf("==> index.html 已生成（%.1f KB）\n", file.size("index.html") / 1024))
+cat(sprintf("    收录周数: %d（可视化 %d · 数据检查回退 %d）\n",
+            length(weeks), sum(files == VIZ_FILE), sum(files == CHECK_FILE)))
+cat(sprintf("    最新周: %s - %s\n", dates[1], titles[1]))
+cat(sprintf("    历史周: %d 个\n", length(weeks) - 1))
+cat("    加载策略: 首屏仅 tab 壳，点击周次才加载该周报告\n")
+cat(sprintf("    模板: %s\n", TEMPLATE))
