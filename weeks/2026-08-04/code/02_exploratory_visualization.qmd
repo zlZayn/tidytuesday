@@ -89,14 +89,22 @@ build_stats <- function(grp) {
     peak = vals[py],
     yoy = if (length(pv) && pv < n) (vals[n] - vals[pv]) / vals[pv] else NA,
     chg5y = if (length(fy) && fy < n) (vals[n] - vals[fy]) / vals[fy] else NA,
-    trend = I(list(vals)), # 年度 sparkline（I() 保留为数组）
-    season = I(list(
+    # ---- sparkline 字段：内层必须再套一层 I() ----
+    # 原因：htmlwidgets 用 jsonlite 序列化时开 auto_unbox，长度 1 的向量会被
+    # 解箱成标量（214552.19 而不是 [214552.19]）。react_sparkline 收到标量后
+    # dataui 的 getScales 会对它调 .map，抛 "i.map is not a function"，
+    # 该单元格渲染为空白。
+    # 外层 I() 把整列标记为 list-column，内层 I() 保证每个元素即使是长度 1
+    # 也仍是数组。两层缺一不可——不要「简化」掉任何一层。
+    # 触发条件：某国在数据里只有 1 个观测点（2026-08-04 的乌拉圭即是）。
+    trend = I(list(I(vals))), # 年度 sparkline
+    season = I(list(I(
       df |>
         filter(reporter_desc == grp$reporter_desc[1]) |>
         group_by(ref_month) |>
         summarise(s = sum(primary_value, na.rm = TRUE), .groups = "drop") |>
         pull(s)
-    )) # 月度 sparkline
+    ))) # 月度 sparkline
   )
 }
 tbl <- yr |>
