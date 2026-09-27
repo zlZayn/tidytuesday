@@ -13,14 +13,14 @@
 ```txt
 tidytuesday/
 ├── README.md                # 项目入口文档（本文件）
-├── index.html               # 站点入口页（自动生成：顶栏 + 抽屉列周，选中才加载该周）
+├── index.html               # 站点入口页（自动生成：顶栏 + 抽屉列周，默认加载最新一周）
 ├── assets/                  # 共享样式资源（跨周复用）
 │   ├── styles.css           # 主题样式：渐变标题 + 平滑 TOC + MapleMono（各周报告用）
 │   ├── MapleMono[wght]-VF.ttf   # 等宽字体（styles.css 引用）
 │   └── site/                # 入口页骨架（由 update_site.R 内联进根 index.html）
 │       ├── index.template.html  # 入口页模板（含 @@HUB_*@@ 占位符）
 │       ├── hub.css          # 入口页样式
-│       └── hub.js           # 入口页 tab 与按需加载逻辑
+│       └── hub.js           # 入口页抽屉与按需加载逻辑
 ├── code/                    # 可复用代码（不随周变化）
 │   ├── fetch_tt.R           # 通用取数脚本，参数化日期
 │   └── update_site.R        # 生成入口页 index.html（扫描 weeks/ + 替换模板占位符）

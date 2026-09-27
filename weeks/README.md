@@ -123,4 +123,4 @@ push 到 `main` 后：Actions 重跑 `code/update_site.R` 生成入口页，有�
 4. 每周只需两步：渲染出 `02_exploratory_visualization.html`（该周没有就先渲染 `01_data_check.html`）→ push
    - 下次部署自动重扫目录，无需改脚本
 
-**一句话流程**：每周渲染出固定文件名的 HTML → push → Actions 重跑 `update_site.R` → 重扫目录 → 全部周按新 → 旧进列表 → 点击哪一周才加载哪一周。
+**一句话流程**：每周渲染出固定文件名的 HTML → push → Actions 重跑 `update_site.R` → 重扫目录 → 全部周按新 → 旧进抽屉列表 → 进入页面展示最新一周，其余周选中哪一周才加载哪一周。

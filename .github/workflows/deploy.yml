@@ -40,7 +40,7 @@ jobs:
         with:
           r-version: '4.3'
 
-      # 生成入口页（扫描 weeks/ 渲染各周 tab，首屏不加载任何报告）
+      # 生成入口页（扫描 weeks/ 渲染抽屉列表；进入页面只加载最新一周）
       - name: Generate index.html
         run: Rscript code/update_site.R
 
