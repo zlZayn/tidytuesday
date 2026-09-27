@@ -42,4 +42,26 @@ Vercel 对 HTML 返回 `cache-control: public, max-age=0, must-revalidate`：即
 - 契约新增：入口页输入固定名 `assets/site/index.template.html` / `hub.css` / `hub.js` 与四个占位符；`code/update_site.R` 在注入前校验「模板缺占位符 / 有未知占位符 / 占位符重复出现」并直接报错。已同步 [../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)、[../../weeks/README.md](../../weeks/README.md)、[../../code/README.md](../../code/README.md)、[../../README.md](../../README.md)、[../../AGENTS.md](../../AGENTS.md)。
 - 写文件必须走二进制连接（`file(..., "wb")` + `writeBin`）：R 的默认文本连接在 Windows 把 `\n` 翻成 CRLF、在 Linux CI 写 LF。首次 CI 回写时因此把整份 `index.html` 重写一遍（368 行全变）。改为二进制写 LF 并保留结尾换行后，本地与 CI 产物逐字节一致。
 - 不再把「本地双击 `file://`」当硬约束（目标改为远程 Vercel）；按需加载在 `file://` 下亦实测可用。
+- 布局以内容区最大化为准：顶栏固定 44px 单行，周列表进默认收起的悬浮抽屉（点遮罩 / `Esc` / 选中后自动收起），`iframe` 铺满其余区域且零 padding / border / margin；页脚移除，原页脚的「共 N 周 / 生成于」并入顶栏右侧次要信息。
+- **默认加载口径反转（重要）**：进入页面即加载**最新一周**（列表首项 = 目录名最大），不再是「首屏零请求」。这是维护者的明确要求——站点打开就该有内容，而不是空白等操作。其余周仍需主动选择才加载，「切回零请求」不变。契约文档已同步改写。
+- 顶栏与列表里的按钮一律纯 SVG 图标，不写可见文字；文字改由悬浮提示承载（`data-tip`，黑框 `#333`、4px 圆角，对齐报告内 tippy 观感）。悬停延迟 400ms 出现、80ms 宽限后消失（鼠标扫过相邻元素不闪断）；键盘聚焦立即出现。`aria-label` 全部保留——提示是鼠标增强，不是无障碍替代。
+- 视觉不新增设计语言：复用报告自身 cosmo 主题的令牌——字体栈（`"Source Sans Pro", -apple-system, "Segoe UI", …`）、前景 `#373a3c`、弱化色 `rgba(55,58,60,.75)`、边框 `#e1e1e1`、三级底 `#f8f9fa`、圆角 6px / 8px、强调色 `#2780e3`；品牌文字沿用 [assets/styles.css](../../assets/styles.css) 的 `h1.title` 七色渐变。
+- 无障碍：唤出按钮带 `aria-label` 与 `aria-expanded`，抽屉 `role="dialog"` + `aria-modal` + `aria-labelledby`，打开时焦点移入（优先当前周，其次第一个周次），关闭时焦点回到唤出按钮，`Tab` 在抽屉内循环，`Esc` 关闭，快捷键 `m` 唤出。
 - 已知遗留（与本次改动无关）：`weeks/2026-08-04/output/02_exploratory_visualization.html` 自带一个运行期 JS 报错（`i.map is not a function`，位于其内嵌 plotly 代码 `getScales`），单独打开该报告同样复现。
+
+## 实测（本地 Playwright）
+
+- 进入页面：恰好 1 个 iframe、1 份报告请求（最新周），不是 7 份全量。
+- 顶栏：`position: fixed`、高 44px、子元素垂直居中对齐且未换行、显示当前周与生成信息；唤出按钮无可见文字、含 SVG、保留 `aria-label`。
+- 悬浮提示：悬停 100ms 与 250ms 时 `opacity` 仍为 0，约 411ms 后显示；快速扫过不弹出；键盘聚焦约 25ms 即显示；底色 `rgb(51,51,51)`。全页 17 个元素带提示。
+- 内容区：紧贴顶栏（`top` 44 = 顶栏高）、零 padding、横向铺满；iframe 零边框零内边距。
+- 按需加载：默认 1 份；再选第 4、第 7 周 → 2、3 份；切回第 4、第 1 周保持 3 份（零请求）。
+- 抽屉：按钮打开 / 遮罩关闭 / `Esc` 关闭 / 选中后自动收起；打开时焦点移入抽屉，关闭后回到唤出按钮。
+- 375px 窄屏：文档与 body 均无水平溢出、顶栏不溢出、抽屉宽 330px（88vw）覆盖内容不出界；加载报告后仍无水平滚动。
+- 产物：`index.html` 为 LF-only，两次运行逐字节一致。
+
+## 一处必须记住的实现约束
+
+抽屉的 `visibility` 不能参与有时长的过渡（`transition: visibility .24s`）。它一旦延迟生效，打开瞬间元素仍是 `visibility: hidden`，而 hidden 元素无法获得焦点——`element.focus()` 会静默失败，表现为「点了按钮但焦点还在按钮上」。
+
+正确写法：`transition: transform .24s, visibility 0s`（打开方向瞬时可见），关闭方向用 `visibility 0s linear .24s` 延迟到滑出动画结束才隐藏。该坑已记入根 [AGENTS.md](../../AGENTS.md) 活跃坑。

@@ -39,7 +39,8 @@
 - 站点收录规则：`code/update_site.R` 优先 `output/02_exploratory_visualization.html`，缺失时回退 `output/01_data_check.html` 并标「数据检查」；只渲染 01 的周仍进列表（展示的是数据检查）。
 - `weeks/<date>/code/.gitignore` 由 Quarto 渲染时自动生成（`/.quarto/` 与 `**/*.quarto_ipynb`），不是手写文件。
 - 根 `index.html` 由 CI 每次 push 重新生成：本地手改会被覆盖，要改展示逻辑就改 `assets/site/`（`index.template.html` / `hub.css` / `hub.js`）与 `code/update_site.R`。
-- 入口页是「tab 壳」+ 按需加载：首屏不创建 iframe、不产生报告请求；点击某周才加载那一周，已加载过的周切回零请求。三个已知陷阱——(1) 不要靠 `loading="lazy"` 决定加载，实测面板一屏高时 7 个 iframe 仍全部立即加载，行为取决于浏览器视口距离阈值，不可控；(2) 不要在 iframe 的 `load` 回调里 `replaceChildren` / 移除该节点，会触发无限重载循环，提示层只用 `hidden` 切换；(3) 七份报告跨周重复 10 个元素 id，拼接 DOM 必然冲突，只能用 iframe 隔离。
+- 入口页是「薄外壳」+ 按需加载：顶栏固定 44px 单行（唤出按钮是纯 SVG 图标 + 悬浮提示），周列表在默认收起的悬浮抽屉里，iframe 铺满其余区域且无 padding / border。进页面即加载**最新一周**（仅这一份请求），其余周选中才加载，已加载过的周切回零请求。已知陷阱——(1) 不要靠 `loading="lazy"` 决定加载，实测面板一屏高时 7 个 iframe 仍全部立即加载，行为取决于浏览器视口距离阈值，不可控；(2) 不要在 iframe 的 `load` 回调里 `replaceChildren` / 移除该节点，会触发无限重载循环，提示层只用 `hidden` 切换；(3) 七份报告跨周重复 10 个元素 id，拼接 DOM 必然冲突，只能用 iframe 隔离；(4) 抽屉的 `visibility` 不能参与时长过渡，否则打开瞬间仍是 `hidden`，而 hidden 元素无法获得焦点，焦点移入会静默失败；(5) 图标按钮的 `aria-label` 不可省——悬浮提示（`data-tip`）是鼠标增强，不是无障碍替代。
+- 入口页视觉只沿用报告自身的 cosmo 令牌（字体栈、`#373a3c` / `#e1e1e1` / 6·8px 圆角 / `#2780e3`）与 `assets/styles.css` 的品牌渐变，不新增第二套设计语言。
 - 周目录 `data/` 为空时 `01_data_check.qmd` 渲染会中断：setup 只 `cat` 一句警告，但「周级整洁汇总」的 `count()` 找不到列会报错（该 chunk 未设 `error: true`）。
 - 行尾是两分现状，不追求统一：手写 `.md` / `.qmd` / `.yml` / `.R` 与脚本生成的 `index.html` 为 LF；`assets/styles.css`（手写例外）与 Quarto 产物（`weeks/<date>/output/*.html`）为 CRLF。工具的硬判据只有「单文件不得混用」；`--target lf --write` 不带 `--ext` 会改写全仓的 CRLF 文件（CSS 与 Quarto 产物），不要无条件跑。
 - `update_site.R` 写 `index.html` 必须用二进制连接（`file(..., "wb")` + `writeBin`）：默认文本连接在 Windows 把 `\n` 翻成 CRLF、在 Linux CI 写 LF，同一输入两边字节不同，CI 会把整份文件重写一遍（368 行全变）并产生无意义 commit。改动后核对本地与 CI 产物逐字节一致。

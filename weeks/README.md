@@ -100,7 +100,7 @@ execute:
 
 push 到 `main` 后：Actions 重跑 `code/update_site.R` 生成入口页，有变化就把 `index.html` commit 回 `main`；Vercel 经 Git 集成监听 `main` 自动部署整仓。
 
-入口页（`index.html`）左侧按新 → 旧列出所有周，**首屏不加载任何报告**；点击某周才加载该周报告并就地展示，已看过的周切回不重新下载。每周条目右侧的 GitHub 图标指向该周的仓库目录。
+入口页（`index.html`）进入即展示最新一周，顶栏左侧图标按钮唤出抽屉、抽屉内按新 → 旧列出所有周；**只有最新一周会被自动请求**，其余周选中才加载并就地全屏展示，已看过的周切回不重新下载。每个周次右侧的 GitHub 图标指向该周的仓库目录。
 
 **脚本与模板的配合关系**（`code/update_site.R` 与 `assets/site/` 互相依赖）：
 
@@ -109,7 +109,7 @@ push 到 `main` 后：Actions 重跑 `code/update_site.R` 生成入口页，有�
 | 产出可视化 | 每周 qmd 模板 | 渲染 `02_exploratory_visualization.qmd` 得到同名 HTML |
 | 收录全部周 | `update_site.R` | 优先 `02_exploratory_visualization.html`，缺失时回退 `01_data_check.html`（条目带「数据检查」标记）；两个都没有的周不进列表 |
 | 排序与默认 | `update_site.R` | 按目录名降序（新 → 旧）进列表，最新周排最前 |
-| 默认加载 | 浏览器 | 首屏不加载任何周；点击哪一周才加载哪一周 |
+| 默认加载 | 浏览器 | 进入页面自动加载最新一周；其余周选中哪一周才加载哪一周 |
 | 页面骨架 | `assets/site/` | `index.template.html` + `hub.css` + `hub.js`，由脚本占位符替换后内联进 `index.html` |
 
 **硬编码约定**（改动任一侧都会破坏部署，必须同步改）：

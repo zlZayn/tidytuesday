@@ -20,7 +20,7 @@
 1. `code/fetch_tt.R [日期]` 经 `tidytuesdayR` 下载 → `weeks/<date>/data/<dataset>.csv`。
 2. `01_data_check.qmd`（`params$week` 指定周次）→ 7 步质量检查 + 清洗审计 + 整洁演示 → `output/01_data_check.html` 与 `output/<dataset>_cleaned.csv`。
 3. `02_exploratory_visualization.qmd` → 图表与解读 → `output/02_exploratory_visualization.html`。
-4. `code/update_site.R` 扫描各周产物（02 优先、回退 01）→ 读 `assets/site/` 下的模板与静态资源 → 占位符替换生成根 `index.html`（左侧按新 → 旧列出全部周，只做「tab 壳」）。
+4. `code/update_site.R` 扫描各周产物（02 优先、回退 01）→ 读 `assets/site/` 下的模板与静态资源 → 占位符替换生成根 `index.html`（只做「外壳」：薄顶栏 + 唤出式抽屉列周，进页面即展示最新一周）。
 5. `.github/workflows/deploy.yml`：push 到 main → CI 重跑 `update_site.R` → 有变化则把 `index.html` commit 回 main → Vercel 经 Git 集成自动部署整仓。
 
 ## 设计要点
@@ -29,7 +29,10 @@
 - 数据检查与可视化拆两个 qmd：质量报告与数据故事职责分离，一份失败不影响另一份。
 - `01_data_check.qmd` 是参数化通用模板：六周共用同一份检查逻辑，只改 `params$week`。
 - 入口页由脚本生成而非手写：新增周不改 HTML，避免手写清单漂移。
-- 入口页是「tab 壳」+ 按需加载：首屏不创建任何 iframe、不产生任何报告请求；点击某周才创建该周 iframe 并设 `src`，只下载那一周（单周 gzip 后 1.4–3.3 MiB，全量 7 周约 14 MiB）。已创建的面板留在 DOM 中切显隐，切回零请求。
+- 入口页是「薄外壳」+ 按需加载：进页面即加载**最新一周**（仅这一份请求），其余周选中才创建该周 iframe 并设 `src`（单周 gzip 后 1.4–3.3 MiB，全量 7 周约 14 MiB）。已创建的面板留在 DOM 中切显隐，切回零请求。
+- 入口页把自身 UI 压到最小、内容区最大化：顶栏固定 44px 单行，周列表放在默认收起的悬浮抽屉里（点遮罩 / `Esc` / 选中后自动收起），`iframe` 铺满顶栏以下区域且无 padding / border / margin。视觉沿用报告自身的 cosmo 令牌（字体栈、`#373a3c` 前景、`#e1e1e1` 边框、6/8px 圆角、`#2780e3` 强调色）与 `assets/styles.css` 的品牌渐变，不引入第二套设计语言。
+- 图标按钮不写可见文字，统一用 `data-tip` 走悬浮提示（黑框 `#333`，对齐报告内 tippy 观感）；悬停延迟约 400ms 出现、键盘聚焦立即出现——延迟是手感要求，键盘用户不该等。`aria-label` 必须同时保留，提示是鼠标增强而非无障碍替代。
+- 抽屉的 `visibility` 必须瞬时生效（`transition: visibility 0s`，仅关闭方向给延迟）：它一旦参与时长过渡，打开瞬间元素仍是 `hidden`，而 hidden 元素无法获得焦点，焦点移入抽屉会静默失败。
 - 入口页样式与脚本不直接对外：`assets/site/index.template.html` 里的 `@@HUB_CSS@@` / `@@HUB_DATA@@` / `@@HUB_JS@@` / `@@REPO_URL@@` 由 `update_site.R` 做固定字符串替换；占位符用 at-at 包裹而非双花括号，避免与 CSS/JS 的花括号混淆。
 - 不用 `loading="lazy"` 决定是否加载：实测面板为一屏高时 7 个 iframe 仍全部立即加载，只有面板远高于视口才延迟，行为取决于浏览器视口距离阈值，不可控。
 - 每周报告之间不能直接拼接 DOM：七份报告各自自带 Bootstrap + Quarto 样式，且跨周重复 10 个元素 id（`quarto-content`、`quarto-document-content`、`TOC`、`toc-title`、`title-block-header` 等）与 2 个 `link/style` id，拼接必然冲突。iframe 是唯一可行的隔离手段。
