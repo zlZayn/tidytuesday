@@ -12,7 +12,7 @@
     HUB_CSS    <- assets/site/hub.css   内容
     HUB_DATA   <- 各周 {date,title,kind,src,repo} 的 JSON
     HUB_JS     <- assets/site/hub.js    内容
-    REPO_URL   <- 仓库地址（头部 GitHub 链接）
+    REPO_URL   <- 仓库地址（顶栏 GitHub 链接）
 
   四个占位符在模板里写成「at-at 包裹」的形式，不用双花括号，避免与 CSS/JS 的
   大量花括号混淆。
@@ -27,44 +27,71 @@
 </head>
 <body>
 
-<!-- 八爪鱼图标定义一次，两处 <use> 复用 -->
+<!-- 八爪鱼图标定义一次，多处 <use> 复用 -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
   <symbol id="i-octo" viewBox="0 0 16 16">
     <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
   </symbol>
 </svg>
 
-<header class="site-header">
-  <div class="brand">
-    <h1>TidyTuesday Visualization Hub</h1>
-    <a class="repo-link" href="@@REPO_URL@@" target="_blank" rel="noopener" title="zlZayn / tidytuesday">
-      <svg class="octo" width="20" height="20" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-octo"></use></svg>
-      <span class="who">zlZayn</span>
+<!-- 顶栏：单行、固定。左侧唤出按钮（纯图标 + 悬浮提示）+ 品牌 + 仓库图标，右侧当前周与生成信息 -->
+<header class="hub-header">
+  <button type="button" class="hub-icon-btn" id="hub-menu"
+          aria-label="打开周次列表" aria-expanded="false" aria-controls="hub-drawer"
+          data-tip="周次列表（M）">
+    <svg width="15" height="13" viewBox="0 0 15 13" aria-hidden="true">
+      <rect x="0" y="0" width="15" height="1.8" rx="0.9"/>
+      <rect x="0" y="5.6" width="15" height="1.8" rx="0.9"/>
+      <rect x="0" y="11.2" width="15" height="1.8" rx="0.9"/>
+    </svg>
+  </button>
+
+  <div class="hub-brand">
+    <span class="name">TidyTuesday</span>
+    <a class="repo" href="@@REPO_URL@@" target="_blank" rel="noopener"
+       aria-label="在 GitHub 打开仓库 zlZayn/tidytuesday"
+       data-tip="GitHub 仓库">
+      <svg class="octo" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-octo"></use></svg>
     </a>
   </div>
-  <span class="tagline">每周 R 数据可视化 · 点击左侧周次按需加载 · 自动部署</span>
+
+  <div class="hub-meta">
+    <span class="now" id="hub-now" aria-live="polite"></span>
+    <span class="sep" aria-hidden="true">·</span>
+    <span class="gen" id="hub-gen"></span>
+  </div>
 </header>
 
-<div class="layout">
-  <nav class="weeks" aria-label="周次列表">
-    <h2>Weekly Reports</h2>
-    <ul id="weeks-list"></ul>
-  </nav>
-
-  <div class="content">
-    <div class="meta">
-      <h3 id="viz-title"></h3>
-      <span class="date" id="viz-date"></span>
-    </div>
-    <!-- 面板在首次点击某个 tab 时才插入这里；首屏只有空态提示，
-         不创建 iframe，也不产生任何报告请求 -->
-    <div class="stage" id="stage">
-      <div class="empty" id="stage-empty">从左侧选择一个周次，加载该周报告</div>
-    </div>
+<!-- 内容区：紧贴顶栏，iframe 全屏，hub 不加任何内边距 -->
+<main class="hub-main">
+  <div class="hub-stage" id="stage">
+    <!-- 无 JS 时不执行任何加载；给出直达链接作为兜底 -->
+    <noscript>
+      <div class="hub-noscript">
+        需要启用 JavaScript 才能在此切换周次。也可直接打开
+        <a href="./weeks/">weeks/</a> 目录浏览各周报告。
+      </div>
+    </noscript>
   </div>
-</div>
+</main>
 
-<footer class="site-footer" id="hub-foot"></footer>
+<!-- 抽屉：悬浮层，默认收起，打开时覆盖在内容之上 -->
+<div class="hub-scrim" id="hub-scrim" data-open="false" aria-hidden="true"></div>
+
+<nav class="hub-drawer" id="hub-drawer" data-open="false"
+     role="dialog" aria-modal="true" aria-labelledby="hub-drawer-title">
+  <div class="dh">
+    <h2 id="hub-drawer-title">Weekly Reports</h2>
+    <button type="button" class="hub-icon-btn hub-close" id="hub-close"
+            aria-label="关闭周次列表" data-tip="关闭（Esc）">
+      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+        <path d="M1 1 L11 11 M11 1 L1 11" stroke="currentColor" stroke-width="1.6"
+              stroke-linecap="round" fill="none"/>
+      </svg>
+    </button>
+  </div>
+  <ul class="hub-weeks" id="weeks-list"></ul>
+</nav>
 
 <script type="application/json" id="hub-data">
 @@HUB_DATA@@

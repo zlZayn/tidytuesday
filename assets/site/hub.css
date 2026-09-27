@@ -4,149 +4,378 @@
    这个文件不直接被浏览器加载：code/update_site.R 读取它，内联进
    assets/site/index.template.html 的样式占位符，产出根 index.html。
    （此处刻意不写出占位符的字面写法——脚本会校验替换后不残留占位符。）
-   所以改样式改这里，不要手改根 index.html（每次 CI 重跑都会被覆盖）。
+
+   视觉语言取自各周报告自身，不另立一套：
+     - 字体栈与报告一致：cosmo 主题的 "Source Sans Pro" 栈
+     - 前景 #373a3c / 弱化 rgba(55,58,60,.75)：cosmo 的 body 色与 secondary
+     - 边框 #e1e1e1：cosmo --bs-border-color
+     - 圆角 6px / 8px：cosmo --bs-border-radius / -lg
+     - 强调色 #2780e3：cosmo --bs-primary（报告里的链接与按钮同色）
+     - 品牌字色渐变：复用 assets/styles.css 的 h1.title 七色阶梯
+     - 悬浮提示的黑色框：对齐报告内 tippy 的观感（#333 底、白字、4px 圆角）
    ========================================================================== */
 
+:root {
+  --hub-header-h: 44px;
+
+  --hub-bg: #fff;
+  --hub-fg: #373a3c;
+  --hub-muted: rgba(55, 58, 60, .75);
+  --hub-faint: rgba(55, 58, 60, .55);
+  --hub-border: #e1e1e1;
+  --hub-tertiary: #f8f9fa;
+  --hub-secondary: #e9ecef;
+  --hub-primary: #2780e3;
+  --hub-focus: rgba(39, 128, 227, .25);
+
+  --hub-radius: 6px;
+  --hub-radius-lg: 8px;
+  --hub-shadow-sm: 0 .125rem .25rem rgba(0, 0, 0, .075);
+  --hub-shadow: 0 .5rem 1rem rgba(0, 0, 0, .15);
+
+  --hub-font: "Source Sans Pro", -apple-system, BlinkMacSystemFont, "Segoe UI",
+              Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei",
+              sans-serif;
+
+  --hub-ease: cubic-bezier(.2, .8, .2, 1);
+
+  /* 悬浮提示：对齐报告内 tippy 的黑色框 */
+  --hub-tip-bg: #333;
+  --hub-tip-fg: #fff;
+  --hub-tip-radius: 4px;
+}
+
 *, *::before, *::after { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;               /* 内容区自身不滚动，避免双滚动条 */
+}
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-               "Microsoft YaHei", sans-serif;
-  background: #f5f5f7;
-  color: #1d1d1f;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+  font-family: var(--hub-font);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--hub-fg);
+  background: var(--hub-bg);
   -webkit-font-smoothing: antialiased;
 }
 
-/* ---------- 顶栏 ---------- */
-.site-header {
-  background: #fff;
-  border-bottom: 1px solid #e5e5e7;
-  padding: 14px 24px;
+/* 统一的图标按钮外观：只放 SVG，文字进悬浮提示 */
+.hub-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--hub-fg);
+  background: var(--hub-bg);
+  border: 1px solid var(--hub-border);
+  border-radius: var(--hub-radius);
+  cursor: pointer;
+  transition: background-color .15s var(--hub-ease),
+              border-color .15s var(--hub-ease),
+              color .15s var(--hub-ease);
+}
+.hub-icon-btn:hover { background: var(--hub-tertiary); border-color: #d0d0d0; }
+.hub-icon-btn:focus-visible { outline: 3px solid var(--hub-focus); outline-offset: 1px; }
+.hub-icon-btn svg { display: block; fill: currentColor; }
+
+/* ---------- 顶栏：单行、固定、不随内容滚动 ---------- */
+.hub-header {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 30;
+  height: var(--hub-header-h);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 10px;
+  background: var(--hub-bg);
+  border-bottom: 1px solid var(--hub-border);
 }
-.brand { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.brand h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
-.repo-link {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 13px; font-weight: 600; color: #1d1d1f; text-decoration: none;
-}
-.repo-link:hover { color: #0e8056; }
-.repo-link .who { border-bottom: 1px solid transparent; }
-.repo-link:hover .who { border-bottom-color: currentColor; }
-.tagline { font-size: 12px; color: #86868b; }
 
-/* 八爪鱼图标统一走 SVG sprite（见模板里的 <symbol id="i-octo">） */
+/* 品牌：文字走 styles.css 的七色渐变 */
+.hub-brand {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.hub-brand .name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  white-space: nowrap;
+  background-image: linear-gradient(90deg,
+      #0e8056, #0e8074, #0e6074, #0e4074, #100e74, #300e74, #570e74,
+      #570e74, #300e74, #100e74, #0e4074, #0e6074, #0e8074, #0e8056);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+.hub-brand .repo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--hub-faint);
+  text-decoration: none;
+  border-radius: var(--hub-radius);
+}
+.hub-brand .repo:hover { color: var(--hub-primary); background: var(--hub-tertiary); }
+.hub-brand .repo:focus-visible { outline: 3px solid var(--hub-focus); outline-offset: 1px; }
 .octo { display: block; fill: currentColor; flex-shrink: 0; }
 
-/* ---------- 主体两栏 ---------- */
-.layout { flex: 1; display: flex; min-height: 0; }
+/* 右侧：当前周 + 生成信息（次要信息） */
+.hub-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--hub-muted);
+}
+.hub-meta .now {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hub-meta .now .d { color: var(--hub-faint); }
+.hub-meta .now .t { color: var(--hub-fg); font-weight: 600; }
+.hub-meta .gen {
+  flex: 0 0 auto;
+  color: var(--hub-faint);
+  white-space: nowrap;
+}
+.hub-meta .sep { color: var(--hub-border); flex: 0 0 auto; }
 
-/* ---------- 左侧周列表 ---------- */
-.weeks {
-  width: 320px; flex-shrink: 0; background: #fff;
-  border-right: 1px solid #e5e5e7; padding: 18px 0; overflow-y: auto;
+/* ---------- 内容区：紧贴顶栏下方，零内边距 ---------- */
+.hub-main {
+  position: fixed;
+  inset: var(--hub-header-h) 0 0 0;
+  min-width: 0;
 }
-.weeks h2 {
-  margin: 0 0 8px; padding: 0 20px;
-  font-size: 12px; font-weight: 600; color: #86868b;
-  text-transform: uppercase; letter-spacing: .05em;
-}
-.weeks ul { list-style: none; margin: 0; padding: 0; }
-.week { display: flex; align-items: stretch; }
-.week .tab {
-  flex: 1; min-width: 0; text-align: left; cursor: pointer;
-  font: inherit; font-size: 13px; color: #1d1d1f;
-  background: none; border: 0; border-left: 3px solid transparent;
-  padding: 9px 4px 9px 20px; transition: background .15s;
-}
-.week .tab:hover { background: #f5f5f7; }
-.week .tab[aria-selected="true"] {
-  background: #f0f0f4; border-left-color: #0e8056; font-weight: 600;
-}
-.week .tab .t {
-  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.week .tab .d {
-  display: block; margin-top: 2px;
-  font-size: 11px; font-weight: 400; color: #86868b;
-}
-/* 每周 tab 旁边的 GitHub 八爪鱼：默认淡，hover 变实 */
-.week .src {
-  flex-shrink: 0; display: flex; align-items: center;
-  padding: 0 16px 0 8px; opacity: .3; transition: opacity .15s;
-}
-.week .src:hover, .week .src:focus-visible { opacity: 1; }
+.hub-stage { position: absolute; inset: 0; }
 
-/* ---------- 右侧舞台 ---------- */
-.content {
-  flex: 1; min-width: 0; padding: 18px 24px;
-  display: flex; flex-direction: column;
-}
-.meta { margin-bottom: 10px; flex-shrink: 0; display: flex; align-items: baseline; gap: 10px; }
-.meta h3 { margin: 0; font-size: 15px; font-weight: 600; }
-.meta .date { font-size: 12px; color: #86868b; }
-
-.stage { flex: 1; position: relative; min-height: 0; }
-
-/* 每周一个面板：懒创建，只有激活的那个 display:block。
-   已加载过的面板留在 DOM 里，切回时零请求。 */
+/* 每周一个面板：懒创建，只有激活的那个显示。
+   已加载过的面板留在 DOM 里，切回零请求。 */
 .panel { position: absolute; inset: 0; display: none; }
 .panel[data-active="true"] { display: block; }
+
+/* iframe 铺满内容区，hub 不加任何 padding / border / margin */
 .panel iframe {
-  display: block; width: 100%; height: 100%;
-  border: 1px solid #e5e5e7; border-radius: 8px; background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+  display: block;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: var(--hub-bg);
 }
+
 .panel .hint {
-  position: absolute; inset: 0; z-index: 1;
-  display: flex; align-items: center; justify-content: center;
-  padding: 24px; text-align: center;
-  font-size: 14px; color: #86868b;
-  background: #fff; border: 1px solid #e5e5e7; border-radius: 8px;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--hub-muted);
+  background: var(--hub-bg);
 }
 .panel .hint[hidden] { display: none; }
 
-/* 首屏空态：尚未点击任何周次时显示。
-   首屏刻意不创建 iframe、不发起任何报告请求。 */
-.stage > .empty {
-  position: absolute; inset: 0;
-  display: flex; align-items: center; justify-content: center;
-  padding: 24px; text-align: center;
-  font-size: 14px; color: #86868b;
-  border: 1px dashed #d2d2d7; border-radius: 8px; background: #fff;
-}
-.stage > .empty[hidden] { display: none; }
-
-/* ---------- 页脚 ---------- */
-.site-footer {
-  padding: 12px; text-align: center; font-size: 12px; color: #86868b;
-  background: #fff; border-top: 1px solid #e5e5e7;
+/* 无 JS 时的兜底提示 */
+.hub-noscript {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--hub-muted);
 }
 
-/* ---------- 窄屏：左栏折成横向滚动条 ---------- */
-@media (max-width: 760px) {
-  .layout { flex-direction: column; }
-  .weeks {
-    width: auto; border-right: 0; border-bottom: 1px solid #e5e5e7;
-    padding: 0; max-height: 42vh;
-  }
-  .weeks h2 { display: none; }
-  .weeks ul { display: flex; overflow-x: auto; }
-  .week { flex-shrink: 0; border-right: 1px solid #e5e5e7; }
-  .week .tab { padding: 10px 14px; border-left: 0; border-bottom: 3px solid transparent; }
-  .week .tab[aria-selected="true"] { border-left: 0; border-bottom-color: #0e8056; }
-  .week .tab .t { max-width: 60vw; }
-  .week .src { padding: 0 12px 0 0; }
-  .content { padding: 14px; }
-  .stage { min-height: 60vh; }
+/* ---------- 抽屉：悬浮层，覆盖内容，默认收起 ---------- */
+.hub-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, .35);
+  opacity: 0;
+  visibility: hidden;
+  /* visibility 用 0 时长 + 延迟：关闭时等淡出结束再隐藏 */
+  transition: opacity .2s var(--hub-ease), visibility 0s linear .2s;
+}
+.hub-scrim[data-open="true"] {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity .2s var(--hub-ease), visibility 0s;
+}
+
+.hub-drawer {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(340px, 88vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--hub-bg);
+  border-right: 1px solid var(--hub-border);
+  box-shadow: var(--hub-shadow);
+  transform: translateX(-102%);
+  visibility: hidden;
+  /* transform 做滑出动画；visibility 必须瞬时生效（0 时长、无延迟），
+     否则打开瞬间元素仍是 hidden —— 而 hidden 元素无法获得焦点，
+     焦点移入抽屉会静默失败。关闭方向才需要延迟，等滑出播完再隐藏。 */
+  transition: transform .24s var(--hub-ease), visibility 0s linear .24s;
+  overscroll-behavior: contain;
+}
+.hub-drawer[data-open="true"] {
+  transform: none;
+  visibility: visible;
+  transition: transform .24s var(--hub-ease), visibility 0s;
+}
+
+.hub-drawer .dh {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: var(--hub-header-h);
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--hub-border);
+}
+.hub-drawer .dh h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--hub-faint);
+}
+/* 抽屉里的关闭按钮沿用图标按钮外观，但去掉边框与底色（hover 才显形） */
+.hub-close {
+  border-color: transparent;
+  background: none;
+  color: var(--hub-muted);
+}
+.hub-close:hover { background: var(--hub-tertiary); border-color: transparent; color: var(--hub-fg); }
+
+.hub-weeks {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  overflow-y: auto;
+}
+.week { display: flex; align-items: stretch; gap: 2px; }
+
+.week .tab {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  font: inherit;
+  font-size: 14px;
+  color: var(--hub-fg);
+  background: none;
+  border: 0;
+  border-radius: var(--hub-radius);
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background-color .15s var(--hub-ease);
+}
+.week .tab:hover { background: var(--hub-tertiary); }
+.week .tab:focus-visible { outline: 3px solid var(--hub-focus); outline-offset: -1px; }
+.week .tab[aria-current="true"] {
+  background: var(--hub-secondary);
+  box-shadow: inset 3px 0 0 var(--hub-primary);
+}
+.week .tab .t {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.week .tab[aria-current="true"] .t { font-weight: 600; }
+.week .tab .d {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  color: var(--hub-faint);
+}
+
+/* 每周 tab 旁边的 GitHub 八爪鱼 */
+.week .src {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  color: var(--hub-faint);
+  border-radius: var(--hub-radius);
+  text-decoration: none;
+}
+.week .src:hover { color: var(--hub-primary); background: var(--hub-tertiary); }
+.week .src:focus-visible { outline: 3px solid var(--hub-focus); outline-offset: -1px; }
+
+/* ---------- 悬浮提示：报告内 tippy 同款黑色框 ---------- */
+.hub-tip {
+  position: fixed;
+  z-index: 60;
+  left: 0;
+  top: 0;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 5px 9px;
+  font-family: var(--hub-font);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--hub-tip-fg);
+  background: var(--hub-tip-bg);
+  border-radius: var(--hub-tip-radius);
+  box-shadow: var(--hub-shadow-sm);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .12s var(--hub-ease);
+}
+.hub-tip[data-show="true"] { opacity: 1; }
+
+/* 小箭头：指向目标。水平位置由 JS 写入 --arrow-x（默认居中） */
+.hub-tip::after {
+  content: "";
+  position: absolute;
+  left: var(--arrow-x, 50%);
+  margin-left: -4px;
+  border: 4px solid transparent;
+}
+.hub-tip[data-place="bottom"]::after { bottom: 100%; border-bottom-color: var(--hub-tip-bg); }
+.hub-tip[data-place="top"]::after { top: 100%; border-top-color: var(--hub-tip-bg); }
+
+/* ---------- 窄屏 ---------- */
+@media (max-width: 560px) {
+  :root { --hub-header-h: 42px; }
+  .hub-meta .gen, .hub-meta .sep { display: none; }  /* 只留当前周 */
+  .hub-meta .now .t { font-weight: 400; }
+  .hub-meta .now .d { display: none; }
+  .hub-drawer { width: 88vw; }
 }
 
 @media (prefers-reduced-motion: reduce) {

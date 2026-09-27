@@ -9,8 +9,8 @@
 #   2. 按目录名排序（新 -> 旧），最新周为默认展开项
 #   3. 读取 assets/site/ 下的模板与静态资源，替换占位符，写出根 index.html
 #
-# 入口页只是「tab 壳」：首屏不含任何 iframe，也不产生任何报告请求；
-# 点击某个周次时，浏览器才创建该周的 iframe 并设 src，只下载那一周。
+# 入口页只是「外壳」：薄顶栏 + 默认收起的周次抽屉。进入页面即加载最新一周
+# （只有这一份被请求），其余周选中时才创建该周 iframe 并设 src，只下载那一周。
 # ------------------------------------------------------------------------------
 # ⚠ 硬编码约定（本脚本与每周 qmd 模板互相配合，改动任一侧都会破坏部署）:
 #   1. 可视化产物固定名: weeks/<date>/output/02_exploratory_visualization.html
@@ -198,5 +198,5 @@ cat(sprintf("    收录周数: %d（可视化 %d · 数据检查回退 %d）\n",
             length(weeks), sum(files == VIZ_FILE), sum(files == CHECK_FILE)))
 cat(sprintf("    最新周: %s - %s\n", dates[1], titles[1]))
 cat(sprintf("    历史周: %d 个\n", length(weeks) - 1))
-cat("    加载策略: 首屏仅 tab 壳，点击周次才加载该周报告\n")
+cat("    加载策略: 进入即加载最新一周；其余周选中才加载（切回不重复请求）\n")
 cat(sprintf("    模板: %s\n", TEMPLATE))
