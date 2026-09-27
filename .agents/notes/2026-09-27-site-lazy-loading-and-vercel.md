@@ -39,6 +39,7 @@ Vercel 对 HTML 返回 `cache-control: public, max-age=0, must-revalidate`：即
 
 ## 影响
 
-- 契约新增：入口页输入固定名 `assets/site/index.template.html` / `hub.css` / `hub.js` 与四个占位符；`code/update_site.R` 在注入前校验「模板缺占位符 / 有未知占位符」并直接报错。已同步 [../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)、[../../weeks/README.md](../../weeks/README.md)、[../../code/README.md](../../code/README.md)、[../../README.md](../../README.md)、[../../AGENTS.md](../../AGENTS.md)。
+- 契约新增：入口页输入固定名 `assets/site/index.template.html` / `hub.css` / `hub.js` 与四个占位符；`code/update_site.R` 在注入前校验「模板缺占位符 / 有未知占位符 / 占位符重复出现」并直接报错。已同步 [../docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)、[../../weeks/README.md](../../weeks/README.md)、[../../code/README.md](../../code/README.md)、[../../README.md](../../README.md)、[../../AGENTS.md](../../AGENTS.md)。
+- 写文件必须走二进制连接（`file(..., "wb")` + `writeBin`）：R 的默认文本连接在 Windows 把 `\n` 翻成 CRLF、在 Linux CI 写 LF。首次 CI 回写时因此把整份 `index.html` 重写一遍（368 行全变）。改为二进制写 LF 并保留结尾换行后，本地与 CI 产物逐字节一致。
 - 不再把「本地双击 `file://`」当硬约束（目标改为远程 Vercel）；按需加载在 `file://` 下亦实测可用。
 - 已知遗留（与本次改动无关）：`weeks/2026-08-04/output/02_exploratory_visualization.html` 自带一个运行期 JS 报错（`i.map is not a function`，位于其内嵌 plotly 代码 `getScales`），单独打开该报告同样复现。

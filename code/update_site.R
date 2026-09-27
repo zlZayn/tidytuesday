@@ -182,7 +182,13 @@ if (length(regmatches(out, gregexpr("@@[A-Z_]+@@", out))[[1]]) > 0) {
 # ------------------------------------------------------------------------------
 # 4. 写出 index.html
 # ------------------------------------------------------------------------------
-writeLines(strsplit(out, "\n", fixed = TRUE)[[1]], "index.html", useBytes = TRUE)
+# 必须显式写二进制连接：默认连接是文本模式，Windows 会把 \n 翻成 CRLF，
+# 而 Linux CI 写 LF —— 同一份输入在两边产出不同字节，CI 每次都会把整个文件
+# 重写一遍（368 行全变），既产生无意义 commit 也让 diff 无法阅读。
+# 统一写 LF 与 \n、并保留结尾换行，保证本地与 CI 逐字节一致。
+con <- file("index.html", open = "wb")
+writeBin(charToRaw(paste0(out, "\n")), con)
+close(con)
 
 # ------------------------------------------------------------------------------
 # 5. 渲染日志（只进 stdout，不进 HTML）

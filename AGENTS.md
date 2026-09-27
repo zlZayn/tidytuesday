@@ -41,7 +41,8 @@
 - 根 `index.html` 由 CI 每次 push 重新生成：本地手改会被覆盖，要改展示逻辑就改 `assets/site/`（`index.template.html` / `hub.css` / `hub.js`）与 `code/update_site.R`。
 - 入口页是「tab 壳」+ 按需加载：首屏不创建 iframe、不产生报告请求；点击某周才加载那一周，已加载过的周切回零请求。三个已知陷阱——(1) 不要靠 `loading="lazy"` 决定加载，实测面板一屏高时 7 个 iframe 仍全部立即加载，行为取决于浏览器视口距离阈值，不可控；(2) 不要在 iframe 的 `load` 回调里 `replaceChildren` / 移除该节点，会触发无限重载循环，提示层只用 `hidden` 切换；(3) 七份报告跨周重复 10 个元素 id，拼接 DOM 必然冲突，只能用 iframe 隔离。
 - 周目录 `data/` 为空时 `01_data_check.qmd` 渲染会中断：setup 只 `cat` 一句警告，但「周级整洁汇总」的 `count()` 找不到列会报错（该 chunk 未设 `error: true`）。
-- 行尾是两分现状，不追求统一：手写 `.md` / `.qmd` / `.yml` / `.R` 为 LF；`assets/styles.css`（手写例外）、`index.html`（脚本生成）与 Quarto 产物为 CRLF。工具的硬判据只有「单文件不得混用」；`--target lf --write` 不带 `--ext` 会改写全仓 23 个 CRLF 文件（HTML / CSS / .gitignore 三类 17 个，其中已提交 5 个；另 6 个是 `.quarto/_freeze` 缓存与 `debug_render.txt`，均未提交）。
+- 行尾是两分现状，不追求统一：手写 `.md` / `.qmd` / `.yml` / `.R` 与脚本生成的 `index.html` 为 LF；`assets/styles.css`（手写例外）与 Quarto 产物（`weeks/<date>/output/*.html`）为 CRLF。工具的硬判据只有「单文件不得混用」；`--target lf --write` 不带 `--ext` 会改写全仓的 CRLF 文件（CSS 与 Quarto 产物），不要无条件跑。
+- `update_site.R` 写 `index.html` 必须用二进制连接（`file(..., "wb")` + `writeBin`）：默认文本连接在 Windows 把 `\n` 翻成 CRLF、在 Linux CI 写 LF，同一输入两边字节不同，CI 会把整份文件重写一遍（368 行全变）并产生无意义 commit。改动后核对本地与 CI 产物逐字节一致。
 - 报告不展示 R 源码：报告 chunk 一律 `#| echo: false`（`code-fold: true` 只在 echo 的块上生效，会把源码折进 `<details>`）；判据是产物中 `<pre` 与 `class="sourceCode` 计数为 0——字面 grep 会假阴性（标识符被 token 包进 span、`<-` 被转义成 `&lt;-`）。七周产物均按此判据验证为 0。
 - 内部笔记（自检表、判定行、变更记录）只写渲染日志（`cat(..., file = stderr())`）与源码注释，不得进 HTML；改完 grep 产物确认。
 - 改 `assets/tt_theme.R` 属共享依赖变更：必须广播各周作者并重渲染受影响周（含 `TT_TYPE` 字号阶梯与重量预算常量）。
