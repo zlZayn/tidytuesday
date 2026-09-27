@@ -1,4 +1,21 @@
-name: Deploy to GitHub Pages
+name: Regenerate site entry page
+
+# 职责：每次 push 到 main 后，重跑 code/update_site.R 生成根 index.html。
+#   - 生成的 index.html 直接 commit 回 main（用 GITHUB_TOKEN）
+#   - Vercel 通过 Git 集成监听 main，自动部署；本 workflow 不碰 Vercel
+#   - 只装 base R：update_site.R 无第三方依赖
+#
+# 触发条件只有 push 与 workflow_dispatch，刻意不加 schedule：
+#   index.html 里含生成日期（generated），跨天定时重跑会产生日期变化 → 无意义 commit。
+#
+# 关于 commit 信息里的 [skip ci]：
+#   - 它只对 GitHub Actions 有意义（GitHub 据此跳过本次 push 触发的 workflow）；
+#     Vercel 不识别该标记，因此回写的 commit 仍会触发 Vercel 重新部署。
+#   - 递归防护其实已由 GITHUB_TOKEN 本身提供：用 GITHUB_TOKEN 发起的 push 事件
+#     不会再次触发 workflow，[skip ci] 是额外一层保险。
+#   - 例外：若 Vercel 后台 Git → Ignored Build Step 配了识别 [skip ci] 的脚本，
+#     回写的 commit 会被 Vercel 跳过（那是 Vercel 侧设置，不在本文件控制范围）。
+#     当前假设该设置未启用；若启用，改为不带 [skip ci] 的提交信息即可。
 
 on:
   push:
@@ -6,16 +23,14 @@ on:
   workflow_dispatch: # 手动触发
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write # commit index.html 回 main 需要写权限
 
 concurrency:
-  group: pages
+  group: regenerate-index
   cancel-in-progress: true
 
 jobs:
-  build:
+  regenerate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,20 +40,19 @@ jobs:
         with:
           r-version: '4.3'
 
-      # 生成入口页 index.html（扫描 weeks/ 找最新周）
+      # 生成入口页（扫描 weeks/ 渲染各周 tab，首屏不加载任何报告）
       - name: Generate index.html
         run: Rscript code/update_site.R
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: . # 整仓上传（index.html + weeks/ 下的 self-contained HTML）
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
-  # 说明：仓库需在 Settings > Pages 里选择 "GitHub Actions" 作为来源
+      # 只有真的变了才 commit，避免每次 push 都产生空提交
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- index.html; then
+            echo "index.html 无变化，跳过 commit"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git commit -m "chore(site): 重新生成 index.html [skip ci]"
+          git push
