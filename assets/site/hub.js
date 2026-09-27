@@ -27,6 +27,7 @@
   var listEl   = document.getElementById("weeks-list");
   var stageEl  = document.getElementById("stage");
   var nowEl    = document.getElementById("hub-now");
+  var countEl  = document.getElementById("hub-count");
   var genEl    = document.getElementById("hub-gen");
   var drawerEl = document.getElementById("hub-drawer");
   var scrimEl  = document.getElementById("hub-scrim");
@@ -225,6 +226,8 @@
 
   /* ---------------- 周列表 ---------------- */
 
+  /* 标题与日期之间不用文本分隔符：间隔由 CSS 给（.d 的 margin-right），
+     「数据检查」这类标记走独立的 .kind 小标签而不是括号文字。 */
   function buildWeek(week, index) {
     var li = el("li", "week");
 
@@ -233,10 +236,16 @@
     tab.setAttribute("aria-current", "false");
     tab.setAttribute("aria-controls", "panel-" + index);
     /* 标题过长时会被省略号截断，提示里给完整信息 */
-    tab.setAttribute("data-tip", week.date + " · " + week.title);
+    tab.setAttribute("data-tip", week.date + " " + week.title +
+                               (week.kind ? "（" + week.kind + "）" : ""));
 
     var t = el("span", "t");
-    t.textContent = week.title + (week.kind ? " · " + week.kind : "");
+    t.textContent = week.title;
+    if (week.kind) {
+      var k = el("span", "kind");
+      k.textContent = week.kind;
+      t.appendChild(k);
+    }
     var d = el("span", "d");
     d.textContent = week.date;
     tab.appendChild(t);
@@ -254,8 +263,8 @@
     src.rel = "noopener";
     src.setAttribute("aria-label", week.date + " 在 GitHub 上的目录");
     src.setAttribute("data-tip", "在 GitHub 查看该周目录");
-    src.innerHTML = '<svg class="octo" width="14" height="14" viewBox="0 0 16 16" ' +
-                    'aria-hidden="true"><use href="#i-octo"></use></svg>';
+    src.innerHTML = '<svg class="octo" viewBox="0 0 16 16" aria-hidden="true">' +
+                    '<use href="#i-octo"></use></svg>';
     li.appendChild(src);
 
     listEl.appendChild(li);
@@ -268,9 +277,14 @@
 
     nowEl.innerHTML = "";
     var d = el("span", "d");
-    d.textContent = week.date + " · ";
+    d.textContent = week.date;
     var t = el("span", "t");
-    t.textContent = week.title + (week.kind ? " · " + week.kind : "");
+    t.textContent = week.title;
+    if (week.kind) {
+      var nk = el("span", "kind");
+      nk.textContent = week.kind;
+      t.appendChild(nk);
+    }
     nowEl.appendChild(d);
     nowEl.appendChild(t);
 
@@ -312,7 +326,9 @@
 
   weeks.forEach(buildWeek);
 
-  genEl.textContent = weeks.length + " 周 · 生成于 " + data.generated;
+  /* 周数进小标签，生成日期单独一行（它指「本页何时生成」，不是某一周的日期） */
+  countEl.textContent = weeks.length + " 周";
+  genEl.textContent = "生成于 " + data.generated;
 
   /* 进入页面直接展示最新一周（列表首项 = 目录名最大）：
      只请求这一份报告，其余周仍需用户主动选择才加载。 */

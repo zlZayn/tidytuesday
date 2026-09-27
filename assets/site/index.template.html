@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TidyTuesday Visualization Hub</title>
+<title>TidyTuesday 可视化 — zlZayn</title>
 <!--
   ============================================================================
   本文件是模板，不是产物。真正的根 index.html 由 code/update_site.R 读取本文件、
@@ -34,33 +34,34 @@
   </symbol>
 </svg>
 
-<!-- 顶栏：单行、固定。左侧唤出按钮（纯图标 + 悬浮提示）+ 品牌 + 仓库图标，右侧当前周与生成信息 -->
+<!-- 顶栏：单行、固定。左侧唤出按钮（纯图标 + 悬浮提示）+ 品牌 + 仓库图标，右侧当前周 -->
 <header class="hub-header">
   <button type="button" class="hub-icon-btn" id="hub-menu"
           aria-label="打开周次列表" aria-expanded="false" aria-controls="hub-drawer"
           data-tip="周次列表（M）">
-    <svg width="15" height="13" viewBox="0 0 15 13" aria-hidden="true">
+    <svg class="icon-bars" viewBox="0 0 15 13" aria-hidden="true">
       <rect x="0" y="0" width="15" height="1.8" rx="0.9"/>
       <rect x="0" y="5.6" width="15" height="1.8" rx="0.9"/>
       <rect x="0" y="11.2" width="15" height="1.8" rx="0.9"/>
     </svg>
   </button>
 
+  <!-- 品牌：作者署名不写在这里（本站是对官方数据的个人练习），只在八爪鱼提示里出现 -->
   <div class="hub-brand">
-    <span class="name">TidyTuesday</span>
+    <span class="wordmark">
+      <span class="name">TidyTuesday</span>
+      <span class="sub">可视化</span>
+    </span>
     <a class="repo" href="@@REPO_URL@@" target="_blank" rel="noopener"
-       aria-label="在 GitHub 打开仓库 zlZayn/tidytuesday"
-       data-tip="GitHub 仓库">
-      <svg class="octo" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-octo"></use></svg>
+       aria-label="在 GitHub 打开 zlZayn/tidytuesday 仓库"
+       data-tip="zlZayn/tidytuesday">
+      <svg class="octo" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-octo"></use></svg>
     </a>
   </div>
 
   <div class="hub-meta">
     <span class="now" id="hub-now" aria-live="polite"></span>
-    <span class="sep" aria-hidden="true">·</span>
-    <span class="gen" id="hub-gen"></span>
-  </div>
-</header>
+  </div></header>
 
 <!-- 内容区：紧贴顶栏，iframe 全屏，hub 不加任何内边距 -->
 <main class="hub-main">
@@ -80,15 +81,23 @@
 
 <nav class="hub-drawer" id="hub-drawer" data-open="false"
      role="dialog" aria-modal="true" aria-labelledby="hub-drawer-title">
+  <!-- 抽屉顶：标题 + 周数小标签 +（下一行）本站生成日期。
+       生成日期放这里而不是顶栏：它表示「本页何时生成」，与各周自身的日期
+       （列表项里 2026-08-25 那种）分开，避免被读成某一周。 -->
   <div class="dh">
-    <h2 id="hub-drawer-title">Weekly Reports</h2>
-    <button type="button" class="hub-icon-btn hub-close" id="hub-close"
-            aria-label="关闭周次列表" data-tip="关闭（Esc）">
-      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-        <path d="M1 1 L11 11 M11 1 L1 11" stroke="currentColor" stroke-width="1.6"
-              stroke-linecap="round" fill="none"/>
-      </svg>
-    </button>
+    <div class="dh-head">
+      <div class="dh-id">
+        <h2 id="hub-drawer-title">Weekly Reports</h2>
+        <span class="chip" id="hub-count"></span>
+      </div>
+      <button type="button" class="hub-icon-btn hub-close" id="hub-close"
+              aria-label="关闭周次列表" data-tip="关闭（Esc）">
+        <svg class="icon-x" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M1 1 L11 11 M11 1 L1 11"/>
+        </svg>
+      </button>
+    </div>
+    <p class="dh-gen" id="hub-gen"></p>
   </div>
   <ul class="hub-weeks" id="weeks-list"></ul>
 </nav>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TidyTuesday Visualization Hub</title>
+<title>TidyTuesday 可视化 — zlZayn</title>
 <!--
   ============================================================================
   本文件是模板，不是产物。真正的根 index.html 由 code/update_site.R 读取本文件、
@@ -44,8 +44,11 @@
 
   --hub-bg: #fff;
   --hub-fg: #373a3c;
-  --hub-muted: rgba(55, 58, 60, .75);
-  --hub-faint: rgba(55, 58, 60, .55);
+  --hub-muted: rgba(55, 58, 60, .75);   /* 5.35:1 于白底 */
+  /* 0.70 是满足 WCAG AA 4.5:1 的最小值（实测 4.62:1）。
+     它大量用于 11–12px 的日期与「生成于」，低于此值会掉到 3:1 一带，
+     对正文尺寸的文字属不合格。 */
+  --hub-faint: rgba(55, 58, 60, .70);
   --hub-border: #e1e1e1;
   --hub-tertiary: #f8f9fa;
   --hub-secondary: #e9ecef;
@@ -53,7 +56,6 @@
   --hub-focus: rgba(39, 128, 227, .25);
 
   --hub-radius: 6px;
-  --hub-radius-lg: 8px;
   --hub-shadow-sm: 0 .125rem .25rem rgba(0, 0, 0, .075);
   --hub-shadow: 0 .5rem 1rem rgba(0, 0, 0, .15);
 
@@ -62,6 +64,24 @@
               sans-serif;
 
   --hub-ease: cubic-bezier(.2, .8, .2, 1);
+
+  /* 字号阶梯：五档，跨控件复用，避免各处随手写数字。
+     品牌 > 正文 > 提示 > 元信息 > 微标  */
+  --hub-fs-brand: 15px;
+  --hub-fs-body: 14px;
+  --hub-fs-tip: 12.5px;
+  --hub-fs-meta: 12px;
+  --hub-fs-micro: 11px;
+
+  /* 尺寸阶梯：按钮方框、图标方框、小标签行高
+     （SVG 的宽高统一由 CSS 给，模板里不写 width/height，避免两处漂移） */
+  --hub-box-btn: 30px;
+  --hub-box-icon: 26px;
+  --hub-label-h: 16px;
+
+  /* 八爪鱼图标两档：顶栏与抽屉条目 */
+  --hub-octo-brand: 15px;
+  --hub-octo-item: 13px;
 
   /* 悬浮提示：对齐报告内 tippy 的黑色框 */
   --hub-tip-bg: #333;
@@ -80,7 +100,7 @@ html, body {
 
 body {
   font-family: var(--hub-font);
-  font-size: 15px;
+  font-size: var(--hub-fs-body);
   line-height: 1.5;
   color: var(--hub-fg);
   background: var(--hub-bg);
@@ -93,8 +113,8 @@ body {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
+  width: var(--hub-box-btn);
+  height: var(--hub-box-btn);
   padding: 0;
   color: var(--hub-fg);
   background: var(--hub-bg);
@@ -107,7 +127,6 @@ body {
 }
 .hub-icon-btn:hover { background: var(--hub-tertiary); border-color: #d0d0d0; }
 .hub-icon-btn:focus-visible { outline: 3px solid var(--hub-focus); outline-offset: 1px; }
-.hub-icon-btn svg { display: block; fill: currentColor; }
 
 /* ---------- 顶栏：单行、固定、不随内容滚动 ---------- */
 .hub-header {
@@ -123,7 +142,8 @@ body {
   border-bottom: 1px solid var(--hub-border);
 }
 
-/* 品牌：文字走 styles.css 的七色渐变 */
+/* 品牌：主体走 styles.css 的七色渐变，「可视化」退为弱化后缀。
+   作者署名刻意不在这里——本站是对官方数据的个人练习，署名只在八爪鱼提示里。 */
 .hub-brand {
   flex: 0 0 auto;
   display: inline-flex;
@@ -131,8 +151,16 @@ body {
   gap: 8px;
   min-width: 0;
 }
+/* 字标内部按基线对齐，让大小两档文字坐在同一基线上；
+   八爪鱼图标则在 .hub-brand 里垂直居中，不受基线影响。 */
+.hub-brand .wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
 .hub-brand .name {
-  font-size: 15px;
+  font-size: var(--hub-fs-brand);
   font-weight: 700;
   letter-spacing: -.01em;
   white-space: nowrap;
@@ -143,29 +171,68 @@ body {
   -webkit-background-clip: text;
   color: transparent;
 }
+/* 「可视化」是后缀说明，比主体小一档、用同一个字重的常规体，
+   两者基线对齐由 flex 的 align-items: baseline 保证 */
+.hub-brand .sub {
+  font-size: var(--hub-fs-tip);
+  font-weight: 400;
+  color: var(--hub-faint);
+  white-space: nowrap;
+}
 .hub-brand .repo {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: var(--hub-box-icon);
+  height: var(--hub-box-icon);
   color: var(--hub-faint);
   text-decoration: none;
   border-radius: var(--hub-radius);
 }
 .hub-brand .repo:hover { color: var(--hub-primary); background: var(--hub-tertiary); }
 .hub-brand .repo:focus-visible { outline: 3px solid var(--hub-focus); outline-offset: 1px; }
-.octo { display: block; fill: currentColor; flex-shrink: 0; }
 
-/* 右侧：当前周 + 生成信息（次要信息） */
+/* 八爪鱼图标：尺寸只在这里定义一次，模板与 JS 里的 SVG 都不写 width/height，
+   免得改大小时漏改某处导致两个八爪鱼不一样大。 */
+.octo {
+  display: block;
+  fill: currentColor;
+  flex-shrink: 0;
+  width: var(--hub-octo-brand);
+  height: var(--hub-octo-brand);
+}
+/* 列表条目里的小一档 */
+.week .src .octo {
+  width: var(--hub-octo-item);
+  height: var(--hub-octo-item);
+}
+
+/* 线条图标：同样是 CSS 唯一定尺寸。
+   汉堡包按视觉重心压扁一点（3 条横线，宽高比约 15:13），
+   关闭叉按方形。两者都用 currentColor，跟随按钮文字色。 */
+.icon-bars,
+.icon-x {
+  display: block;
+  flex-shrink: 0;
+}
+.icon-bars { width: 15px; height: 13px; fill: currentColor; }
+.icon-x {
+  width: 12px; height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+/* 右侧：仅当前周，日期与标题之间用弱化色的小间隔而不是字符「·」 */
 .hub-meta {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: baseline;
   justify-content: flex-end;
-  gap: 10px;
-  font-size: 12.5px;
+  gap: 8px;
+  font-size: var(--hub-fs-tip);
   color: var(--hub-muted);
 }
 .hub-meta .now {
@@ -174,14 +241,12 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.hub-meta .now .d { color: var(--hub-faint); }
-.hub-meta .now .t { color: var(--hub-fg); font-weight: 600; }
-.hub-meta .gen {
-  flex: 0 0 auto;
+.hub-meta .now .d {
   color: var(--hub-faint);
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  margin-right: 8px;          /* 间距由样式给，不写文本分隔符 */
 }
-.hub-meta .sep { color: var(--hub-border); flex: 0 0 auto; }
+.hub-meta .now .t { color: var(--hub-fg); font-weight: 600; }
 
 /* ---------- 内容区：紧贴顶栏下方，零内边距 ---------- */
 .hub-main {
@@ -207,22 +272,8 @@ body {
   background: var(--hub-bg);
 }
 
-.panel .hint {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  text-align: center;
-  font-size: 14px;
-  color: var(--hub-muted);
-  background: var(--hub-bg);
-}
-.panel .hint[hidden] { display: none; }
-
-/* 无 JS 时的兜底提示 */
+/* 提示层与无 JS 兜底：同一套居中文本排布 */
+.panel .hint,
 .hub-noscript {
   position: absolute;
   inset: 0;
@@ -231,9 +282,15 @@ body {
   justify-content: center;
   padding: 24px;
   text-align: center;
-  font-size: 14px;
+  font-size: var(--hub-fs-body);
   color: var(--hub-muted);
 }
+.panel .hint {
+  z-index: 1;
+  background: var(--hub-bg);
+}
+.panel .hint[hidden] { display: none; }
+.hub-noscript a { color: var(--hub-primary); }
 
 /* ---------- 抽屉：悬浮层，覆盖内容，默认收起 ---------- */
 .hub-scrim {
@@ -280,21 +337,50 @@ body {
 
 .hub-drawer .dh {
   flex: 0 0 auto;
+  padding: 12px 8px 11px 14px;
+  border-bottom: 1px solid var(--hub-border);
+}
+.hub-drawer .dh-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: var(--hub-header-h);
-  padding: 0 8px 0 14px;
-  border-bottom: 1px solid var(--hub-border);
+}
+.hub-drawer .dh-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 .hub-drawer .dh h2 {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--hub-fs-micro);
   font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
   color: var(--hub-faint);
+  white-space: nowrap;
+}
+/* 小标签：周数用它承载，替代「N 周 · …」这类文本拼串 */
+.chip {
+  display: inline-block;
+  padding: 0 6px;
+  font-size: var(--hub-fs-micro);
+  font-weight: 600;
+  line-height: var(--hub-label-h);
+  color: var(--hub-muted);
+  background: var(--hub-tertiary);
+  border: 1px solid var(--hub-border);
+  border-radius: 999px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* 生成日期：与标题左对齐、再小半档，明确是「本页生成于」而非某周日期 */
+.hub-drawer .dh-gen {
+  margin: 7px 0 0;
+  font-size: var(--hub-fs-micro);
+  color: var(--hub-faint);
+  font-variant-numeric: tabular-nums;
 }
 /* 抽屉里的关闭按钮沿用图标按钮外观，但去掉边框与底色（hover 才显形） */
 .hub-close {
@@ -318,7 +404,7 @@ body {
   min-width: 0;
   text-align: left;
   font: inherit;
-  font-size: 14px;
+  font-size: var(--hub-fs-body);
   color: var(--hub-fg);
   background: none;
   border: 0;
@@ -343,8 +429,24 @@ body {
 .week .tab .d {
   display: block;
   margin-top: 1px;
-  font-size: 12px;
+  font-size: var(--hub-fs-meta);
   color: var(--hub-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* 「数据检查」标记：回退周的提示标签，不作为标题文字的一部分 */
+.week .tab .kind,
+.hub-meta .now .kind {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: var(--hub-fs-micro);
+  font-weight: 600;
+  line-height: var(--hub-label-h);
+  vertical-align: 1px;
+  color: var(--hub-primary);
+  background: var(--hub-tertiary);
+  border: 1px solid var(--hub-border);
+  border-radius: var(--hub-radius);
 }
 
 /* 每周 tab 旁边的 GitHub 八爪鱼 */
@@ -353,7 +455,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
+  width: var(--hub-box-btn);
   color: var(--hub-faint);
   border-radius: var(--hub-radius);
   text-decoration: none;
@@ -370,7 +472,7 @@ body {
   max-width: min(320px, calc(100vw - 16px));
   padding: 5px 9px;
   font-family: var(--hub-font);
-  font-size: 12.5px;
+  font-size: var(--hub-fs-tip);
   line-height: 1.4;
   color: var(--hub-tip-fg);
   background: var(--hub-tip-bg);
@@ -396,10 +498,21 @@ body {
 /* ---------- 窄屏 ---------- */
 @media (max-width: 560px) {
   :root { --hub-header-h: 42px; }
-  .hub-meta .gen, .hub-meta .sep { display: none; }  /* 只留当前周 */
+
+  /* 顶栏只保留「日期 + 标题」，标题不再加粗，避免与品牌争视觉重量 */
   .hub-meta .now .t { font-weight: 400; }
-  .hub-meta .now .d { display: none; }
+
+  /* 日期在窄屏仍保留：它是区分周次最可靠的信息，
+     但字号降半档、颜色更弱，让标题占主位 */
+  .hub-meta .now .d { font-size: var(--hub-fs-micro); }
+
   .hub-drawer { width: 88vw; }
+}
+
+/* 更窄（约 375px）：品牌继续收紧，标题让步给省略号 */
+@media (max-width: 400px) {
+  .hub-brand .sub { display: none; }        /* 只留 TidyTuesday */
+  .hub-header { gap: 8px; padding: 0 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -416,33 +529,34 @@ body {
   </symbol>
 </svg>
 
-<!-- 顶栏：单行、固定。左侧唤出按钮（纯图标 + 悬浮提示）+ 品牌 + 仓库图标，右侧当前周与生成信息 -->
+<!-- 顶栏：单行、固定。左侧唤出按钮（纯图标 + 悬浮提示）+ 品牌 + 仓库图标，右侧当前周 -->
 <header class="hub-header">
   <button type="button" class="hub-icon-btn" id="hub-menu"
           aria-label="打开周次列表" aria-expanded="false" aria-controls="hub-drawer"
           data-tip="周次列表（M）">
-    <svg width="15" height="13" viewBox="0 0 15 13" aria-hidden="true">
+    <svg class="icon-bars" viewBox="0 0 15 13" aria-hidden="true">
       <rect x="0" y="0" width="15" height="1.8" rx="0.9"/>
       <rect x="0" y="5.6" width="15" height="1.8" rx="0.9"/>
       <rect x="0" y="11.2" width="15" height="1.8" rx="0.9"/>
     </svg>
   </button>
 
+  <!-- 品牌：作者署名不写在这里（本站是对官方数据的个人练习），只在八爪鱼提示里出现 -->
   <div class="hub-brand">
-    <span class="name">TidyTuesday</span>
+    <span class="wordmark">
+      <span class="name">TidyTuesday</span>
+      <span class="sub">可视化</span>
+    </span>
     <a class="repo" href="https://github.com/zlZayn/tidytuesday" target="_blank" rel="noopener"
-       aria-label="在 GitHub 打开仓库 zlZayn/tidytuesday"
-       data-tip="GitHub 仓库">
-      <svg class="octo" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-octo"></use></svg>
+       aria-label="在 GitHub 打开 zlZayn/tidytuesday 仓库"
+       data-tip="zlZayn/tidytuesday">
+      <svg class="octo" viewBox="0 0 16 16" aria-hidden="true"><use href="#i-octo"></use></svg>
     </a>
   </div>
 
   <div class="hub-meta">
     <span class="now" id="hub-now" aria-live="polite"></span>
-    <span class="sep" aria-hidden="true">·</span>
-    <span class="gen" id="hub-gen"></span>
-  </div>
-</header>
+  </div></header>
 
 <!-- 内容区：紧贴顶栏，iframe 全屏，hub 不加任何内边距 -->
 <main class="hub-main">
@@ -462,15 +576,23 @@ body {
 
 <nav class="hub-drawer" id="hub-drawer" data-open="false"
      role="dialog" aria-modal="true" aria-labelledby="hub-drawer-title">
+  <!-- 抽屉顶：标题 + 周数小标签 +（下一行）本站生成日期。
+       生成日期放这里而不是顶栏：它表示「本页何时生成」，与各周自身的日期
+       （列表项里 2026-08-25 那种）分开，避免被读成某一周。 -->
   <div class="dh">
-    <h2 id="hub-drawer-title">Weekly Reports</h2>
-    <button type="button" class="hub-icon-btn hub-close" id="hub-close"
-            aria-label="关闭周次列表" data-tip="关闭（Esc）">
-      <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-        <path d="M1 1 L11 11 M11 1 L1 11" stroke="currentColor" stroke-width="1.6"
-              stroke-linecap="round" fill="none"/>
-      </svg>
-    </button>
+    <div class="dh-head">
+      <div class="dh-id">
+        <h2 id="hub-drawer-title">Weekly Reports</h2>
+        <span class="chip" id="hub-count"></span>
+      </div>
+      <button type="button" class="hub-icon-btn hub-close" id="hub-close"
+              aria-label="关闭周次列表" data-tip="关闭（Esc）">
+        <svg class="icon-x" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M1 1 L11 11 M11 1 L1 11"/>
+        </svg>
+      </button>
+    </div>
+    <p class="dh-gen" id="hub-gen"></p>
   </div>
   <ul class="hub-weeks" id="weeks-list"></ul>
 </nav>
@@ -521,6 +643,7 @@ body {
   var listEl   = document.getElementById("weeks-list");
   var stageEl  = document.getElementById("stage");
   var nowEl    = document.getElementById("hub-now");
+  var countEl  = document.getElementById("hub-count");
   var genEl    = document.getElementById("hub-gen");
   var drawerEl = document.getElementById("hub-drawer");
   var scrimEl  = document.getElementById("hub-scrim");
@@ -719,6 +842,8 @@ body {
 
   /* ---------------- 周列表 ---------------- */
 
+  /* 标题与日期之间不用文本分隔符：间隔由 CSS 给（.d 的 margin-right），
+     「数据检查」这类标记走独立的 .kind 小标签而不是括号文字。 */
   function buildWeek(week, index) {
     var li = el("li", "week");
 
@@ -727,10 +852,16 @@ body {
     tab.setAttribute("aria-current", "false");
     tab.setAttribute("aria-controls", "panel-" + index);
     /* 标题过长时会被省略号截断，提示里给完整信息 */
-    tab.setAttribute("data-tip", week.date + " · " + week.title);
+    tab.setAttribute("data-tip", week.date + " " + week.title +
+                               (week.kind ? "（" + week.kind + "）" : ""));
 
     var t = el("span", "t");
-    t.textContent = week.title + (week.kind ? " · " + week.kind : "");
+    t.textContent = week.title;
+    if (week.kind) {
+      var k = el("span", "kind");
+      k.textContent = week.kind;
+      t.appendChild(k);
+    }
     var d = el("span", "d");
     d.textContent = week.date;
     tab.appendChild(t);
@@ -748,8 +879,8 @@ body {
     src.rel = "noopener";
     src.setAttribute("aria-label", week.date + " 在 GitHub 上的目录");
     src.setAttribute("data-tip", "在 GitHub 查看该周目录");
-    src.innerHTML = '<svg class="octo" width="14" height="14" viewBox="0 0 16 16" ' +
-                    'aria-hidden="true"><use href="#i-octo"></use></svg>';
+    src.innerHTML = '<svg class="octo" viewBox="0 0 16 16" aria-hidden="true">' +
+                    '<use href="#i-octo"></use></svg>';
     li.appendChild(src);
 
     listEl.appendChild(li);
@@ -762,9 +893,14 @@ body {
 
     nowEl.innerHTML = "";
     var d = el("span", "d");
-    d.textContent = week.date + " · ";
+    d.textContent = week.date;
     var t = el("span", "t");
-    t.textContent = week.title + (week.kind ? " · " + week.kind : "");
+    t.textContent = week.title;
+    if (week.kind) {
+      var nk = el("span", "kind");
+      nk.textContent = week.kind;
+      t.appendChild(nk);
+    }
     nowEl.appendChild(d);
     nowEl.appendChild(t);
 
@@ -806,7 +942,9 @@ body {
 
   weeks.forEach(buildWeek);
 
-  genEl.textContent = weeks.length + " 周 · 生成于 " + data.generated;
+  /* 周数进小标签，生成日期单独一行（它指「本页何时生成」，不是某一周的日期） */
+  countEl.textContent = weeks.length + " 周";
+  genEl.textContent = "生成于 " + data.generated;
 
   /* 进入页面直接展示最新一周（列表首项 = 目录名最大）：
      只请求这一份报告，其余周仍需用户主动选择才加载。 */
