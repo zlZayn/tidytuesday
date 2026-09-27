@@ -96,20 +96,21 @@ execute:
 | 图表 | 每图配 cell 选项 `#&#124; label: fig-*`、`#&#124; fig-cap:`，可交叉引用 |
 | 语言 | **图内文字一律英文**（原因见 [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)）；正文 / 表格注释可为中文 |
 
-## 自动部署（GitHub Pages）
+## 自动部署（Vercel）
 
-push 到 `main` 后，Actions 自动部署到 <https://zlzayn.github.io/tidytuesday/>：
-入口页（index.html）侧边栏列出所有周，iframe 默认展示最新周可视化；点击某周在新标签打开该周报告，同时切换入口页的 iframe 预览；头部 GitHub 图标 + 用户名跳转仓库。
+push 到 `main` 后：Actions 重跑 `code/update_site.R` 生成入口页，有变化就把 `index.html` commit 回 `main`；Vercel 经 Git 集成监听 `main` 自动部署整仓。
 
-**脚本与模板的配合关系**（`code/update_site.R` 与每周 qmd 模板互相依赖）：
+入口页（`index.html`）左侧按新 → 旧列出所有周，**首屏不加载任何报告**；点击某周才加载该周报告并就地展示，已看过的周切回不重新下载。每周条目右侧的 GitHub 图标指向该周的仓库目录。
+
+**脚本与模板的配合关系**（`code/update_site.R` 与 `assets/site/` 互相依赖）：
 
 | 环节 | 谁负责 | 说明 |
 | --- | --- | --- |
 | 产出可视化 | 每周 qmd 模板 | 渲染 `02_exploratory_visualization.qmd` 得到同名 HTML |
 | 收录全部周 | `update_site.R` | 优先 `02_exploratory_visualization.html`，缺失时回退 `01_data_check.html`（条目带「数据检查」标记）；两个都没有的周不进列表 |
-| 排序与默认 | `update_site.R` | 按目录名降序（新 → 旧）进侧边栏，最新周为 iframe 默认内容 |
-| 默认展示 | `update_site.R` | 取日期最大的周作为 iframe 默认内容 |
-| 历史列表 | `update_site.R` | 其余周按日期降序进侧边栏 |
+| 排序与默认 | `update_site.R` | 按目录名降序（新 → 旧）进列表，最新周排最前 |
+| 默认加载 | 浏览器 | 首屏不加载任何周；点击哪一周才加载哪一周 |
+| 页面骨架 | `assets/site/` | `index.template.html` + `hub.css` + `hub.js`，由脚本占位符替换后内联进 `index.html` |
 
 **硬编码约定**（改动任一侧都会破坏部署，必须同步改）：
 
@@ -117,7 +118,9 @@ push 到 `main` 后，Actions 自动部署到 <https://zlzayn.github.io/tidytues
    - 脚本只认这两个文件名，不猜、不改名
 2. 周目录命名：`weeks/<YYYY-MM-DD>/`
    - 字符串排序 = 时间排序，最新周 = 目录名最大的
-3. 每周只需两步：渲染出 `02_exploratory_visualization.html`（该周没有就先渲染 `01_data_check.html`）→ push
+3. 入口页输入固定名：`assets/site/index.template.html`、`assets/site/hub.css`、`assets/site/hub.js`
+   - 模板占位符：`@@HUB_CSS@@` / `@@HUB_DATA@@` / `@@HUB_JS@@` / `@@REPO_URL@@`
+4. 每周只需两步：渲染出 `02_exploratory_visualization.html`（该周没有就先渲染 `01_data_check.html`）→ push
    - 下次部署自动重扫目录，无需改脚本
 
-**一句话流程**：每周渲染出固定文件名的 HTML → push → Actions 重跑 `update_site.R` → 重扫目录 → 全部周按新 → 旧进侧边栏，最新周成为默认展示。
+**一句话流程**：每周渲染出固定文件名的 HTML → push → Actions 重跑 `update_site.R` → 重扫目录 → 全部周按新 → 旧进列表 → 点击哪一周才加载哪一周。

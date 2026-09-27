@@ -2,22 +2,30 @@
 
 个人 TidyTuesday 参与项目：每周拉取官方数据，用 R 做数据检查与可视化，以 Quarto 产出报告并长期积累。本文档是项目入口，说明目录结构与环境要求；每周的流程、模板与约定见 [weeks/README.md](weeks/README.md)。
 
-数据来自官方 [TidyTuesday 仓库](https://github.com/rfordatascience/tidytuesday)（每周二发布），本项目的可视化展示站点见 <https://zlzayn.github.io/tidytuesday/>。
+数据来自官方 [TidyTuesday 仓库](https://github.com/rfordatascience/tidytuesday)（每周二发布）。
+
+**在线浏览 → <https://tidytuesday-taupe.vercel.app>**
+
+站点入口页左侧按新 → 旧列出全部周，**首屏不加载任何报告**；点击某一周才加载那一周（单周 gzip 后约 1.4–3.3 MiB），已看过的周切回不重新下载。
 
 ## 目录结构
 
 ```txt
 tidytuesday/
 ├── README.md                # 项目入口文档（本文件）
-├── index.html               # GitHub Pages 入口页（自动指向最新周可视化）
+├── index.html               # 站点入口页（自动生成：左侧列出全部周，点击才加载该周）
 ├── assets/                  # 共享样式资源（跨周复用）
-│   ├── styles.css           # 主题样式：渐变标题 + 平滑 TOC + MapleMono
-│   └── MapleMono[wght]-VF.ttf   # 等宽字体（styles.css 引用）
+│   ├── styles.css           # 主题样式：渐变标题 + 平滑 TOC + MapleMono（各周报告用）
+│   ├── MapleMono[wght]-VF.ttf   # 等宽字体（styles.css 引用）
+│   └── site/                # 入口页骨架（由 update_site.R 内联进根 index.html）
+│       ├── index.template.html  # 入口页模板（含 @@HUB_*@@ 占位符）
+│       ├── hub.css          # 入口页样式
+│       └── hub.js           # 入口页 tab 与按需加载逻辑
 ├── code/                    # 可复用代码（不随周变化）
 │   ├── fetch_tt.R           # 通用取数脚本，参数化日期
-│   └── update_site.R        # 生成入口页 index.html（扫描 weeks/ 找最新周）
-├── .github/workflows/       # GitHub Actions（push 到 main 自动部署 Pages）
-│   └── deploy.yml           # 部署工作流
+│   └── update_site.R        # 生成入口页 index.html（扫描 weeks/ + 替换模板占位符）
+├── .github/workflows/       # GitHub Actions（push 到 main 重生成入口页并 commit 回 main）
+│   └── deploy.yml           # 生成 + commit 工作流（部署由 Vercel 负责）
 └── weeks/                   # 每周一个独立目录，互不干扰
     ├── README.md            # 每周流程 / qmd 模板 / 约定（见上）
     └── <YYYY-MM-DD>/        # 以日期命名，长期积累清晰
