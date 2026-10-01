@@ -31,8 +31,9 @@
 - [ ] 根 README 门面缺徽章 / License / 贡献段：仓库暂无 LICENSE 文件，需先定许可证。
 - [ ] `weeks/<date>/readme.md`（该周官方说明）一个都不存在：`code/fetch_tt.R` 只在拿到官方 readme 时才写，待确认是否补齐。
 - [ ] `01_data_check.qmd` 的 title / subtitle 是通用文案，未按 [weeks/README.md](weeks/README.md) 模板填「<周主题>」与周数。
+- [ ] 决定 `Regenerate site entry page` 的去留：它唯一的作用是「本地忘了跑 `update_site.R` 时兜底补上」，但代价是一整套 R 环境；且历史上只产出过 1 个 bot commit（`38556ee`，368 行全改，实为当时 CRLF 行尾 bug 的产物，不是真的补收录）。备选：删掉 workflow 改为每周固定本地跑；或改成不装 R 的秒级校验（runner 自带 Python，检查每个周目录是否出现在 `index.html` 里）。
 - [ ] `01_data_check.qmd` 对空 `data/` 的处置：加 `knitr::knit_exit()` 或改成显式报错（所有周模板需同步）。
-- [ ] CI 的 `r-lib/actions/setup-r@v2` 是唯一的耗时来源（实测 27 s ~ 22 m35 s）。待核实 `ubuntu-latest` 是否自带 R：若自带即可整步删掉，否则考虑给该步加缓存。`update_site.R` 是纯 base R，不需要任何第三方包。
+- [x] 已核实：`ubuntu-latest` 现在指向 ubuntu-24.04，其语言清单（Bash / Clang / Dash / GNU C++ / GNU Fortran / Julia / Kotlin / Node / Perl / Python / Ruby / Swift）**不含 R**——R 只在 ubuntu-22.04 镜像里。所以只要坚持在 CI 里跑 R 脚本，`r-lib/actions/setup-r@v2` 就删不掉，加缓存也只能省下载时间、省不掉那一步本身的排队。要真正去掉这 22 分钟，只能不在 CI 里跑 R（见下条）。
 
 ## 活跃坑
 
