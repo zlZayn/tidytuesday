@@ -1,7 +1,7 @@
 # assets/tt_theme.R —— 可视化工艺底线（不含配色）
 #
-# 定位：这里只沉淀"六周共同遵守的工艺"，不提供唯一配色。
-#       每周的调色板在本周 02 qmd 顶部自行声明（六周互不相同）。
+# 定位：这里只沉淀"各周共同遵守的工艺"，不提供唯一配色。
+#       每周的调色板在本周 02 qmd 顶部自行声明（逐周互不相同）。
 # 用法：在周 qmd 的 setup chunk 里 source() 本文件，然后 tt_base(...) + 本周自定色彩。
 #
 # 底线清单（新增/修改图表时必须满足）：
@@ -30,7 +30,7 @@
 TT_FONT <- "Segoe UI"
 TT_MONO <- "Consolas"
 
-# ---- 排版纪律常量（六周共用；图内文案的每个字号都必须取自 TT_TYPE）----
+# ---- 排版纪律常量（各周共用；图内文案的每个字号都必须取自 TT_TYPE）----
 # 阶梯单调递减且相邻可辨：title 16 > subtitle 13 > axis_title 11 > axis_text 9.5 > annot 8.5 > caption 7.5
 TT_TYPE <- c(title = 16, subtitle = 13, axis_title = 11, axis_text = 9.5, annot = 8.5, caption = 7.5)
 TT_TYPE_MAX   <- 6L                                  # 全图字号种类上限
@@ -45,7 +45,7 @@ TT_CAPTION_WIDTH <- 118                              # 脚注折行宽度（超�
 # 导出参数底线（周 qmd 可覆盖，但必须显式写）
 TT_EXPORT <- list(width = 9, height = 5.4, dpi = 240)
 
-# ---- 页面重量预算（工程约束，六周共同遵守）----
+# ---- 页面重量预算（工程约束，各周共同遵守）----
 # 单图内嵌 PNG <= 2 MB、单页自包含 HTML <= 6 MB。
 # 达标手段优先级：① 先降大画幅图的 fig-dpi（逐块写 "#| dpi: 200"，下限 TT_DPI_FLOOR 160）
 #                 ② 再减画布尺寸 / 分层数量

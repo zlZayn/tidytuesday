@@ -15,7 +15,7 @@
 - 取数：`Rscript code/fetch_tt.R [YYYY-MM-DD]`（缺省取今天；落到 `weeks/<date>/data/`）
 - 渲染单周：在 `weeks/<date>/code/` 下执行 `quarto render 01_data_check.qmd`（`_quarto.yml` 已固化 `output-dir: ../output`）
 - 生成站点入口页：`Rscript code/update_site.R`（CI 在 push 后自动重跑）
-- 链接校验：`python "$env:USERPROFILE\.agents\skills\maintenance-flow\check-links.py" . --fragments --refs`
+- 链接校验：`python "$env:USERPROFILE\.agents\skills\maintenance-flow\check-markdown-links.py" . --fragments --refs`
 - 换行校验：`python "$env:USERPROFILE\.agents\skills\maintenance-flow\check-line-endings.py" .`（只读模式只报「单文件混用行尾」，当前 0 个；写入模式必须先限定范围，如 `--ext .md --ext .qmd --ext .yml --ext .R`）
 
 ## 验证快照
@@ -23,7 +23,7 @@
 - 部署状态 → [Actions](https://github.com/zlZayn/tidytuesday/actions)（自更新来源，不抄数字）。
 - 渲染验收（无 CI 覆盖，命令级）：`output/<name>.html` 存在且 > 1 MB；`output/<name>_cleaned.csv` 落盘；HTML 内含 8 个小节（Skeleton → 清洗审计与处理）与「周级整洁汇总」，且无 `there is no package` / `Execution halted` 字样。
 - 本地工具链：R 4.6.0 · Quarto 1.9.37；CI 用 R 4.3，只跑 base R 脚本。
-- 02 可视化验收：六周 `output/02_exploratory_visualization.html` 存在、单页 ≤ 6 MiB、单图 ≤ 2 MiB、图内文字英文、正文不含内部笔记与 R 源码；判据与替代方案见 [.agents/notes/2026-09-20-visual-identity-policy.md](.agents/notes/2026-09-20-visual-identity-policy.md)。
+- 02 可视化验收：每周 `output/02_exploratory_visualization.html` 存在、单页 ≤ 6 MiB、单图 ≤ 2 MiB、图内文字英文、正文不含内部笔记与 R 源码；判据与替代方案见 [.agents/notes/2026-09-20-visual-identity-policy.md](.agents/notes/2026-09-20-visual-identity-policy.md)。
 
 ## 待办
 
@@ -31,7 +31,7 @@
 - [ ] 根 README 门面缺徽章 / License / 贡献段：仓库暂无 LICENSE 文件，需先定许可证。
 - [ ] `weeks/<date>/readme.md`（该周官方说明）一个都不存在：`code/fetch_tt.R` 只在拿到官方 readme 时才写，待确认是否补齐。
 - [ ] `01_data_check.qmd` 的 title / subtitle 是通用文案，未按 [weeks/README.md](weeks/README.md) 模板填「<周主题>」与周数。
-- [ ] `01_data_check.qmd` 对空 `data/` 的处置：加 `knitr::knit_exit()` 或改成显式报错（六个模板需同步）。
+- [ ] `01_data_check.qmd` 对空 `data/` 的处置：加 `knitr::knit_exit()` 或改成显式报错（所有周模板需同步）。
 
 ## 活跃坑
 
@@ -39,7 +39,7 @@
 - 站点收录规则：`code/update_site.R` 优先 `output/02_exploratory_visualization.html`，缺失时回退 `output/01_data_check.html` 并标「数据检查」；只渲染 01 的周仍进列表（展示的是数据检查）。
 - `weeks/<date>/code/.gitignore` 由 Quarto 渲染时自动生成（`/.quarto/` 与 `**/*.quarto_ipynb`），不是手写文件。
 - 根 `index.html` 由 CI 每次 push 重新生成：本地手改会被覆盖，要改展示逻辑就改 `assets/site/`（`index.template.html` / `hub.css` / `hub.js`）与 `code/update_site.R`。
-- 入口页是「薄外壳」+ 按需加载：顶栏固定 44px 单行（唤出按钮是纯 SVG 图标 + 悬浮提示），周列表在默认收起的悬浮抽屉里，iframe 铺满其余区域且无 padding / border。进页面即加载**最新一周**（仅这一份请求），其余周选中才加载，已加载过的周切回零请求。已知陷阱——(1) 不要靠 `loading="lazy"` 决定加载，实测面板一屏高时 7 个 iframe 仍全部立即加载，行为取决于浏览器视口距离阈值，不可控；(2) 不要在 iframe 的 `load` 回调里 `replaceChildren` / 移除该节点，会触发无限重载循环，提示层只用 `hidden` 切换；(3) 七份报告跨周重复 10 个元素 id，拼接 DOM 必然冲突，只能用 iframe 隔离；(4) 抽屉的 `visibility` 不能参与时长过渡，否则打开瞬间仍是 `hidden`，而 hidden 元素无法获得焦点，焦点移入会静默失败；(5) 图标按钮的 `aria-label` 不可省——悬浮提示（`data-tip`）是鼠标增强，不是无障碍替代。
+- 入口页是「薄外壳」+ 按需加载：顶栏固定 44px 单行（唤出按钮是纯 SVG 图标 + 悬浮提示），周列表在默认收起的悬浮抽屉里，iframe 铺满其余区域且无 padding / border。进页面即加载**最新一周**（仅这一份请求），其余周选中才加载，已加载过的周切回零请求。已知陷阱——(1) 不要靠 `loading="lazy"` 决定加载，实测面板一屏高时全部 iframe 仍立即加载，行为取决于浏览器视口距离阈值，不可控；(2) 不要在 iframe 的 `load` 回调里 `replaceChildren` / 移除该节点，会触发无限重载循环，提示层只用 `hidden` 切换；(3) 各周报告跨周重复同一批元素 id（`quarto-content` / `TOC` / `title-block-header` 等），拼接 DOM 必然冲突，只能用 iframe 隔离；(4) 抽屉的 `visibility` 不能参与时长过渡，否则打开瞬间仍是 `hidden`，而 hidden 元素无法获得焦点，焦点移入会静默失败；(5) 图标按钮的 `aria-label` 不可省——悬浮提示（`data-tip`）是鼠标增强，不是无障碍替代。
 - 入口页视觉只沿用报告自身的 cosmo 令牌（字体栈、`#373a3c` / `#e1e1e1` / 6px 圆角 / `#2780e3`）与 `assets/styles.css` 的品牌渐变，不新增第二套设计语言。字号五档、图标尺寸两档，全部集中在 `assets/site/hub.css` 顶部变量里；SVG 不写 `width`/`height`，由 CSS 定尺寸。
 - 入口页身份分三层：主题＝顶栏字标「TidyTuesday 可视化」（**不写作者名、不写「官方」**——本站是对官方数据的个人练习），作者只在八爪鱼/仓库链接的悬浮提示里，来源由各周报告自身的副标题承担。
 - 不要在 HTML/JS 里用 `·` 等字符拼分隔（周数与生成日期已改为小标签与独立行）；生成日期放抽屉顶部，不放顶栏，否则会被读成某一周的日期。
@@ -47,7 +47,7 @@
 - 周目录 `data/` 为空时 `01_data_check.qmd` 渲染会中断：setup 只 `cat` 一句警告，但「周级整洁汇总」的 `count()` 找不到列会报错（该 chunk 未设 `error: true`）。
 - 行尾是两分现状，不追求统一：手写 `.md` / `.qmd` / `.yml` / `.R` 与脚本生成的 `index.html` 为 LF；`assets/styles.css`（手写例外）与 Quarto 产物（`weeks/<date>/output/*.html`）为 CRLF。工具的硬判据只有「单文件不得混用」；`--target lf --write` 不带 `--ext` 会改写全仓的 CRLF 文件（CSS 与 Quarto 产物），不要无条件跑。
 - `update_site.R` 写 `index.html` 必须用二进制连接（`file(..., "wb")` + `writeBin`）：默认文本连接在 Windows 把 `\n` 翻成 CRLF、在 Linux CI 写 LF，同一输入两边字节不同，CI 会把整份文件重写一遍（368 行全变）并产生无意义 commit。改动后核对本地与 CI 产物逐字节一致。
-- 报告不展示 R 源码：报告 chunk 一律 `#| echo: false`（`code-fold: true` 只在 echo 的块上生效，会把源码折进 `<details>`）；判据是产物中 `<pre` 与 `class="sourceCode` 计数为 0——字面 grep 会假阴性（标识符被 token 包进 span、`<-` 被转义成 `&lt;-`）。七周产物均按此判据验证为 0。
+- 报告不展示 R 源码：报告 chunk 一律 `#| echo: false`（`code-fold: true` 只在 echo 的块上生效，会把源码折进 `<details>`）；判据是产物中 `<pre` 计数为 0——`class="sourceCode` 会假阳性，Quarto 把自带的代码样式表以 base64 内嵌，grep 到的全是 CSS 规则而非展示出来的源码。
 - 内部笔记（自检表、判定行、变更记录）只写渲染日志（`cat(..., file = stderr())`）与源码注释，不得进 HTML；改完 grep 产物确认。
 - 改 `assets/tt_theme.R` 属共享依赖变更：必须广播各周作者并重渲染受影响周（含 `TT_TYPE` 字号阶梯与重量预算常量）。
 
