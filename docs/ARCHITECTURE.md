@@ -21,7 +21,8 @@
 2. `01_data_check.qmd`（`params$week` 指定周次）→ 7 步质量检查 + 清洗审计 + 整洁演示 → `output/01_data_check.html` 与 `output/<dataset>_cleaned.csv`。
 3. `02_exploratory_visualization.qmd` → 图表与解读 → `output/02_exploratory_visualization.html`。
 4. `code/update_site.R` 扫描各周产物（02 优先、回退 01）→ 读 `assets/site/` 下的模板与静态资源 → 占位符替换生成根 `index.html`（只做「外壳」：薄顶栏 + 唤出式抽屉列周，进页面即展示最新一周）。
-5. `.github/workflows/deploy.yml`：push 到 main → CI 重跑 `update_site.R` → 有变化则把 `index.html` commit 回 main → Vercel 经 Git 集成自动部署整仓。
+5. `.githooks/pre-commit`：提交触及 `weeks/`、`assets/site/` 或 `code/update_site.R` 时重跑 `update_site.R`，把 `index.html` 并入本次提交。
+6. `.github/workflows/deploy.yml`：push 到 main → CI 跑 `code/check_site_index.py` 只校验不生成 → Vercel 经 Git 集成自动部署整仓。
 
 ## 设计要点
 
@@ -49,7 +50,7 @@
 - 改 `update_site.R` 的扫描文件名或周目录命名规则 → 必须同步每周产物名、[../weeks/README.md](../weeks/README.md) 硬编码约定段与本文件。
 - 改 `assets/site/` 三个文件名或模板占位符 → 必须同步 `update_site.R` 顶部的固定名常量与本文件；脚本会在注入前校验「模板缺占位符 / 有未知占位符」并直接报错。
 - 只渲染 01 的周会以带「数据检查」标记的条目进列表：站点不漏周，但访客看到的是数据检查而非可视化。
-- 根 `index.html` 由 CI 每次 push 重写：本地手改会被覆盖，展示逻辑改 `update_site.R` 与 `assets/site/`。
+- 根 `index.html` 是生成物，本地手改会被下一次生成覆盖：改展示逻辑要改 `code/update_site.R` 与 `assets/site/`。生成在本地钩子，校验在 CI。
 - 不要在任何 iframe 的 `load` 回调里 `replaceChildren` / 移除该 iframe：会触发重复加载甚至无限重载循环；提示层只用 `hidden` 切换，iframe 节点保持不动。
 - 托管由 Vercel 承担，GitHub Actions 不参与部署：workflow 只负责生成并 commit `index.html`，本仓不引入任何 Pages 相关 action。
 - 改 `assets/tt_theme.R` 是共享依赖变更，广播与重渲染要求见根 [AGENTS.md](../AGENTS.md) 活跃坑。

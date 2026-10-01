@@ -1,70 +1,49 @@
 # tidytuesday
 
-个人 TidyTuesday 参与项目：每周拉取官方数据，用 R 做数据检查与可视化，以 Quarto 产出报告并长期积累。本文档是项目入口，说明目录结构与环境要求；每周的流程、模板与约定见 [weeks/README.md](weeks/README.md)。
+[![Check site entry page](https://github.com/zlZayn/tidytuesday/actions/workflows/deploy.yml/badge.svg)](https://github.com/zlZayn/tidytuesday/actions)
 
-数据来自官方 [TidyTuesday 仓库](https://github.com/rfordatascience/tidytuesday)（每周二发布）。
+每周一份 TidyTuesday 数据报告：先做**数据检查**，再做**探索性可视化**，各自归档成可单文件分享的 HTML，并汇入一个按周切换的在线站点。
 
 **在线浏览 → <https://tidytuesday-taupe.vercel.app>**
 
-站点入口页**进入即展示最新一周**（只请求这一份），其余周在顶栏左侧图标按钮唤出的抽屉里按新 → 旧列出（快捷键 <kbd>M</kbd>）；选中某周才加载那一周（单周 gzip 后约 1.4–3.3 MiB），已看过的周切回不重新下载。
+## 数据从哪来
 
-## 目录结构
+TidyTuesday 每周二发布一份开放数据集（[官方仓库](https://github.com/rfordatascience/tidytuesday)）。本项目按下发日期建目录、原样保存 CSV，周与周之间互不影响。
 
-```txt
-tidytuesday/
-├── README.md                # 项目入口文档（本文件）
-├── index.html               # 站点入口页（自动生成：顶栏 + 抽屉列周，默认加载最新一周）
-├── assets/                  # 共享样式资源（跨周复用）
-│   ├── styles.css           # 主题样式：渐变标题 + 平滑 TOC + MapleMono（各周报告用）
-│   ├── MapleMono[wght]-VF.ttf   # 等宽字体（styles.css 引用）
-│   └── site/                # 入口页骨架（由 update_site.R 内联进根 index.html）
-│       ├── index.template.html  # 入口页模板（含 @@HUB_*@@ 占位符）
-│       ├── hub.css          # 入口页样式
-│       └── hub.js           # 入口页抽屉与按需加载逻辑
-├── code/                    # 可复用代码（不随周变化）
-│   ├── fetch_tt.R           # 通用取数脚本，参数化日期
-│   └── update_site.R        # 生成入口页 index.html（扫描 weeks/ + 替换模板占位符）
-├── .github/workflows/       # GitHub Actions（push 到 main 重生成入口页并 commit 回 main）
-│   └── deploy.yml           # 生成 + commit 工作流（部署由 Vercel 负责）
-└── weeks/                   # 每周一个独立目录，互不干扰
-    ├── README.md            # 每周流程 / qmd 模板 / 约定（见上）
-    └── <YYYY-MM-DD>/        # 以日期命名，长期积累清晰
-        ├── code/            # 本周 qmd 与周内资源（图片、图标）
-        │   ├── _quarto.yml      # 固化输出目录（output-dir: ../output）
-        │   └── *.qmd            # 本周分析文档（数据检查 / 可视化）
-        ├── data/            # 原始数据（CSV，只读）
-        └── output/          # 渲染产物（单文件 HTML + 清洗后 CSV）
-```
+## 每周产出两份报告
 
-设计原则：
+| 报告 | 回答的问题 | 内容 |
+| --- | --- | --- |
+| `01_data_check` | 这份数据**能不能用** | 七步确定性质量检查（结构、缺失与重复、基数、分布、相关性）+ 清洗审计与处理日志 + 周级汇总 |
+| `02_exploratory_visualization` | 这份数据**说明了什么** | 本周选题的图表与解读，每图配标题、口径副标题与来源脚注 |
 
-| 原则 | 体现 |
-| --- | --- |
-| 隔离 | 每周数据、代码、产出放在各自 `weeks/<date>/` 下，互不污染 |
-| 可复用 | 取数逻辑收敛在 `code/fetch_tt.R`；qmd 模板在 `weeks/README.md` 可直接套用 |
-| 灵活 | 模板仅供参考，不强制——每周按需调整文件拆分与内容 |
-| 可移植 | 路径相对项目根或当前周目录，不写死绝对路径 |
+两份都是 `self-contained` 单文件 HTML，样式与字体内嵌，双击即看，也可直接分享。
+
+## 在哪看
+
+站点进入即展示最新一周，顶栏左侧图标唤出周次抽屉（快捷键 <kbd>M</kbd>）；选中哪一周才加载哪一周，已看过的周切回不重复下载。
 
 ## 快速开始
 
 ```bash
-# 拉取最近一周数据
-Rscript code/fetch_tt.R
-
-# 新建周目录后，按 weeks/README.md 的模板写 qmd 并渲染
+Rscript code/fetch_tt.R              # 取最近一周数据
+Rscript code/fetch_tt.R 2026-09-29   # 或指定日期
 ```
 
-每周完整流程、qmd YAML 模板与语言约定见 **[weeks/README.md](weeks/README.md)**。
+取完在 `weeks/<date>/code/` 写 qmd 并 `quarto render`。完整流程与模板见 [weeks/README.md](weeks/README.md)。
 
-## 环境要求
+## 环境
 
-- R >= 4.x
-- tidytuesdayR（dev 版，含最新周映射）：`remotes::install_github("dslc-io/tidytuesdayR")`
-- readr、dplyr、tidyr、purrr、stringr、ggplot2、scales
-- Quarto CLI（渲染 qmd）
-- 交互式表格（可视化 qmd 可选）：reactable、reactablefmtr、dataui、htmltools、htmlwidgets、glue、base64enc
-- 可视化增强（`02_exploratory_visualization.qmd` 已用）：ggtext、ggimage、magick
+- R
+- `tidytuesdayR` — 取数
+- Quarto CLI — 渲染 qmd
 
-## 维护
+各周报告还会用到绘图与制表包，按需安装；清单在各周 `code/*.qmd` 的 setup 块里。
 
-维护索引与文档地图见 [AGENTS.md](AGENTS.md)；设计与契约见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+## 说明
+
+- 站点入口页 `index.html` 由 `code/update_site.R` 生成，不手改。
+- 本站是对官方数据的个人练习，非官方项目。
+- 未附 License：仓库不对外发布，也不需要。
+
+维护者文档地图见 [AGENTS.md](AGENTS.md)，设计与契约见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。

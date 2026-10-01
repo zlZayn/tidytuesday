@@ -1,6 +1,6 @@
 # tidytuesday — 维护索引
 
-个人 TidyTuesday 项目：每周拉取官方数据，用 R / Quarto 产出数据检查与探索性可视化，push 后由 GitHub Actions 重生成入口页并 commit 回 main，Vercel 经 Git 集成自动部署。
+个人 TidyTuesday 项目：每周拉取官方数据，用 R / Quarto 产出数据检查与探索性可视化，入口页由本地 pre-commit 钩子重生成，push 后由 CI 校验同步、Vercel 经 Git 集成自动部署。
 
 ## 全局规则（本项目特有）
 
@@ -24,16 +24,16 @@
 
 - 部署状态 → [Actions](https://github.com/zlZayn/tidytuesday/actions)（自更新来源，不抄数字）；但**推送后不必等它跑完**，理由见「活跃坑」。
 - 渲染验收（无 CI 覆盖，命令级）：`output/<name>.html` 存在且 > 1 MB；`output/<name>_cleaned.csv` 落盘；HTML 内含 8 个小节（Skeleton → 清洗审计与处理）与「周级整洁汇总」，且无 `there is no package` / `Execution halted` 字样。
-- 本地工具链：R 4.6.0 · Quarto 1.9.37；CI 用 R 4.3，只跑 base R 脚本。
+- 本地工具链：R 4.6.0 · Quarto 1.9.37。CI 不装 R，只跑标准库 Python 做同步校验。
 - 02 可视化验收：每周 `output/02_exploratory_visualization.html` 存在、单页 ≤ 6 MiB、单图 ≤ 2 MiB、图内文字英文、正文不含内部笔记与 R 源码；判据与替代方案见 [.agents/notes/2026-09-20-visual-identity-policy.md](.agents/notes/2026-09-20-visual-identity-policy.md)。
 
 ## 待办
 
 - [ ] [weeks/README.md](weeks/README.md) YAML 模板里的 `code-fold: true` 只在 `echo: true` 的块上生效，待决定删行或保留。
-- [ ] 根 README 门面缺徽章 / License / 贡献段：仓库暂无 LICENSE 文件，需先定许可证。
+- [x] 根 README 已按门面重构（2026-10-02）：一句话价值 + 数据来源 + 两份报告职责对照表 + 在线入口 + 快速开始 + 固定三项环境 + 说明段（生成物 / 非官方 / 无 License）。目录树、设计原则、逐包清单已下沉到各子 README 与 `code/*.qmd`。
 - [ ] `weeks/<date>/readme.md`（该周官方说明）一个都不存在：`code/fetch_tt.R` 只在拿到官方 readme 时才写，待确认是否补齐。
 - [ ] `01_data_check.qmd` 的 title / subtitle 是通用文案，未按 [weeks/README.md](weeks/README.md) 模板填「<周主题>」与周数。
-- [x] 已定方案（2026-10-02）：兜底交给 pre-commit 钩子（触及 `weeks/` / `assets/site/` / `code/update_site.R` 时自动重跑 `update_site.R` 并入本次提交），CI 改为只校验不生成。这样「忘了跑」在装过钩子的机器上根本不会发生，而钩子未启用的机器（新 clone、网页端编辑、`--no-verify`）由 CI 的 `check_site_index.py` 兜住——它不装 R，秒级完成，取代原 `setup-r` 的 27 s ~ 22 m35 s。**待执行：把 `.github/workflows/deploy.yml` 换成 check-only 版本。**
+- [x] 已定方案（2026-10-02）：兜底交给 pre-commit 钩子（触及 `weeks/` / `assets/site/` / `code/update_site.R` 时自动重跑 `update_site.R` 并入本次提交），CI 改为只校验不生成。这样「忘了跑」在装过钩子的机器上根本不会发生，而钩子未启用的机器（新 clone、网页端编辑、`--no-verify`）由 CI 的 `check_site_index.py` 兜住——它不装 R，秒级完成，取代原 `setup-r` 的 27 s ~ 22 m35 s。已执行（2026-10-02）：`.github/workflows/deploy.yml` 已换成 check-only，实测 9 s。
 - [ ] `01_data_check.qmd` 对空 `data/` 的处置：加 `knitr::knit_exit()` 或改成显式报错（所有周模板需同步）。
 - [x] 已核实：`ubuntu-latest` 现在指向 ubuntu-24.04，其语言清单（Bash / Clang / Dash / GNU C++ / GNU Fortran / Julia / Kotlin / Node / Perl / Python / Ruby / Swift）**不含 R**——R 只在 ubuntu-22.04 镜像里。所以只要坚持在 CI 里跑 R 脚本，`r-lib/actions/setup-r@v2` 就删不掉，加缓存也只能省下载时间、省不掉那一步本身的排队。要真正去掉这 22 分钟，只能不在 CI 里跑 R（见下条）。
 
@@ -52,10 +52,12 @@
 - `--hub-faint` 透明度不得低于 `.70`：它用于 11–12px 的日期类小字，`.55` 时对白底仅 3.09:1，低于 WCAG AA 4.5:1；`.70` 实测 4.62:1。
 - 周目录 `data/` 为空时 `01_data_check.qmd` 渲染会中断：setup 只 `cat` 一句警告，但「周级整洁汇总」的 `count()` 找不到列会报错（该 chunk 未设 `error: true`）。
 - 行尾是两分现状，不追求统一：手写 `.md` / `.qmd` / `.yml` / `.R` 与脚本生成的 `index.html` 为 LF；`assets/styles.css`（手写例外）与 Quarto 产物（`weeks/<date>/output/*.html`）为 CRLF。工具的硬判据只有「单文件不得混用」；`--target lf --write` 不带 `--ext` 会改写全仓的 CRLF 文件（CSS 与 Quarto 产物），不要无条件跑。
-- `update_site.R` 写 `index.html` 必须用二进制连接（`file(..., "wb")` + `writeBin`）：默认文本连接在 Windows 把 `\n` 翻成 CRLF、在 Linux CI 写 LF，同一输入两边字节不同，CI 会把整份文件重写一遍（368 行全变）并产生无意义 commit。改动后核对本地与 CI 产物逐字节一致。
+- `update_site.R` 写 `index.html` 必须用二进制连接（`file(..., "wb")` + `writeBin`）：默认文本连接在 Windows 把 `\n` 翻成 CRLF、在 Linux CI 写 LF，同一输入两边字节不同，CI 会把整份文件重写一遍（368 行全变）并产生无意义 commit。改动后核对「本地钩子生成」与「CI 校验」两侧一致。
 - 报告不展示 R 源码：报告 chunk 一律 `#| echo: false`（`code-fold: true` 只在 echo 的块上生效，会把源码折进 `<details>`）；判据是产物中 `<pre` 计数为 0——`class="sourceCode` 会假阳性，Quarto 把自带的代码样式表以 base64 内嵌，grep 到的全是 CSS 规则而非展示出来的源码。
-- 推送后不要等远程 CI 才收工：`Regenerate site entry page` 的耗时几乎全在 `r-lib/actions/setup-r@v2`，实测 27 s ~ 22 m35 s 剧烈波动（2026-10-01 那次 job 总 22 m37 s，其中 setup-r 占 22 m35 s，`Generate index.html` 只有 1 s），等它没有收益也没有预测价值。
-- 上面这条的等价验证在本地做：`Rscript code/update_site.R` 是纯 base R 且确定性，本地与 CI 产物应逐字节一致。推送前跑一次，CI 就会走「无变化跳过 commit」分支——2026-10-01 那次推送因此未产生额外 commit。所以「CI 还没跑完」不等于「推送没生效」：`git ls-remote origin main` 与本地 HEAD 相同即可确认已推送。
+- 推送后不必等远程 CI：`Check site entry page` 只跑 `check_site_index.py`，实测 9 s。它也只校验不生成，红叉不阻断 Vercel 部署（Vercel 直接监听 main）。历史上那条 CI 曾因 `r-lib/actions/setup-r@v2` 耗时 27 s ~ 22 m35 s 剧烈波动（2026-10-01 那次 job 总 22 m37 s，其中 setup-r 占 22 m35 s，真正的脚本只跑 1 s），已于 2026-10-02 改为本地钩子 + 只读校验。
+- 「CI 还没跑完」不等于「推送没生效」：确认 `git ls-remote origin main` 与本地 HEAD 相同即可，不必等 CI。
+- 生成是确定性的：`update_site.R` 纯 base R、无网络，同一份已提交文件跑出的 `index.html` 逐字节一致。本地钩子生成、CI 校验，两者看的是同一个结果。
+- 唯一的非确定性是 `generated` 日期（`Sys.Date()`）：CI runner 为 UTC，本地为 UTC+8，所以**在本地 00:00–07:59 推送时两边会差一天**。这不是 bug 也无需处理（CI 已不生成、只校验周列表，不比对日期），但排查「日期看着不对」时先想到它。
 - 内部笔记（自检表、判定行、变更记录）只写渲染日志（`cat(..., file = stderr())`）与源码注释，不得进 HTML；改完 grep 产物确认。
 - 改 `assets/tt_theme.R` 属共享依赖变更：必须广播各周作者并重渲染受影响周（含 `TT_TYPE` 字号阶梯与重量预算常量）。
 
