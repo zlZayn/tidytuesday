@@ -14,7 +14,9 @@
 
 - 取数：`Rscript code/fetch_tt.R [YYYY-MM-DD]`（缺省取今天；落到 `weeks/<date>/data/`）
 - 渲染单周：在 `weeks/<date>/code/` 下执行 `quarto render 01_data_check.qmd`（`_quarto.yml` 已固化 `output-dir: ../output`）
-- 生成站点入口页：`Rscript code/update_site.R`（**推送前先本地跑一次**，CI 只是兜底重跑；本地与 CI 产物逐字节一致时 CI 会跳过 commit）
+- 生成站点入口页：`Rscript code/update_site.R`（通常不用手动跑——见下条钩子）
+- 启用仓库钩子（**每个 clone 各做一次**）：`git config core.hooksPath .githooks`。启用后，凡触及 `weeks/`、`assets/site/`、`code/update_site.R` 的提交都会自动重跑 `update_site.R` 并把 `index.html` 加进本次提交，忘了跑不会发生。
+- 校验入口页与周目录是否同步：`python code/check_site_index.py`（纯标准库、无网络，约 140 ms；不同步时打印该跑什么）
 - 链接校验：`python "$env:USERPROFILE\.agents\skills\maintenance-flow\check-markdown-links.py" . --fragments --refs`
 - 换行校验：`python "$env:USERPROFILE\.agents\skills\maintenance-flow\check-line-endings.py" .`（只读模式只报「单文件混用行尾」，当前 0 个；写入模式必须先限定范围，如 `--ext .md --ext .qmd --ext .yml --ext .R`）
 
@@ -31,7 +33,7 @@
 - [ ] 根 README 门面缺徽章 / License / 贡献段：仓库暂无 LICENSE 文件，需先定许可证。
 - [ ] `weeks/<date>/readme.md`（该周官方说明）一个都不存在：`code/fetch_tt.R` 只在拿到官方 readme 时才写，待确认是否补齐。
 - [ ] `01_data_check.qmd` 的 title / subtitle 是通用文案，未按 [weeks/README.md](weeks/README.md) 模板填「<周主题>」与周数。
-- [ ] 决定 `Regenerate site entry page` 的去留：它唯一的作用是「本地忘了跑 `update_site.R` 时兜底补上」，但代价是一整套 R 环境；且历史上只产出过 1 个 bot commit（`38556ee`，368 行全改，实为当时 CRLF 行尾 bug 的产物，不是真的补收录）。备选：删掉 workflow 改为每周固定本地跑；或改成不装 R 的秒级校验（runner 自带 Python，检查每个周目录是否出现在 `index.html` 里）。
+- [x] 已定方案（2026-10-02）：兜底交给 pre-commit 钩子（触及 `weeks/` / `assets/site/` / `code/update_site.R` 时自动重跑 `update_site.R` 并入本次提交），CI 改为只校验不生成。这样「忘了跑」在装过钩子的机器上根本不会发生，而钩子未启用的机器（新 clone、网页端编辑、`--no-verify`）由 CI 的 `check_site_index.py` 兜住——它不装 R，秒级完成，取代原 `setup-r` 的 27 s ~ 22 m35 s。**待执行：把 `.github/workflows/deploy.yml` 换成 check-only 版本。**
 - [ ] `01_data_check.qmd` 对空 `data/` 的处置：加 `knitr::knit_exit()` 或改成显式报错（所有周模板需同步）。
 - [x] 已核实：`ubuntu-latest` 现在指向 ubuntu-24.04，其语言清单（Bash / Clang / Dash / GNU C++ / GNU Fortran / Julia / Kotlin / Node / Perl / Python / Ruby / Swift）**不含 R**——R 只在 ubuntu-22.04 镜像里。所以只要坚持在 CI 里跑 R 脚本，`r-lib/actions/setup-r@v2` 就删不掉，加缓存也只能省下载时间、省不掉那一步本身的排队。要真正去掉这 22 分钟，只能不在 CI 里跑 R（见下条）。
 
@@ -40,7 +42,9 @@
 - Markdown 里裸 URL 紧跟中文标点会被 GitHub 自动链接吞进 href（`…/tidytuesday/。` → href 带 `%E3%80%82`，点开 404）：一律写成尖括号形式 `<https://…/>`。
 - 站点收录规则：`code/update_site.R` 优先 `output/02_exploratory_visualization.html`，缺失时回退 `output/01_data_check.html` 并标「数据检查」；只渲染 01 的周仍进列表（展示的是数据检查）。
 - `weeks/<date>/code/.gitignore` 由 Quarto 渲染时自动生成（`/.quarto/` 与 `**/*.quarto_ipynb`），不是手写文件。
-- 根 `index.html` 由 CI 每次 push 重新生成：本地手改会被覆盖，要改展示逻辑就改 `assets/site/`（`index.template.html` / `hub.css` / `hub.js`）与 `code/update_site.R`。
+- 根 `index.html` 是生成物：本地手改会被覆盖，要改展示逻辑就改 `assets/site/`（`index.template.html` / `hub.css` / `hub.js`）与 `code/update_site.R`。
+- **钩子的启用状态不随仓库走**：`.githooks/pre-commit` 文件本身会随 clone 下来，但 `core.hooksPath` 是 `.git/config` 里的本地配置。实测全新 clone：文件在、配置空、钩子静默不跑，提交一个假周后 `index.html` 漏掉了它且没有任何报错。所以「装了钩子」只在装过的那台机器上成立，换 clone / 换机器必须重跑 `git config core.hooksPath .githooks`。
+- 钩子挡不住所有入口：GitHub 网页端编辑、以及任何带 `--no-verify` 的提交都绕过它。CI 侧的 `check_site_index.py` 才是覆盖这些入口的那一层。
 - 入口页是「薄外壳」+ 按需加载：顶栏固定 44px 单行（唤出按钮是纯 SVG 图标 + 悬浮提示），周列表在默认收起的悬浮抽屉里，iframe 铺满其余区域且无 padding / border。进页面即加载**最新一周**（仅这一份请求），其余周选中才加载，已加载过的周切回零请求。已知陷阱——(1) 不要靠 `loading="lazy"` 决定加载，实测面板一屏高时全部 iframe 仍立即加载，行为取决于浏览器视口距离阈值，不可控；(2) 不要在 iframe 的 `load` 回调里 `replaceChildren` / 移除该节点，会触发无限重载循环，提示层只用 `hidden` 切换；(3) 各周报告跨周重复同一批元素 id（`quarto-content` / `TOC` / `title-block-header` 等），拼接 DOM 必然冲突，只能用 iframe 隔离；(4) 抽屉的 `visibility` 不能参与时长过渡，否则打开瞬间仍是 `hidden`，而 hidden 元素无法获得焦点，焦点移入会静默失败；(5) 图标按钮的 `aria-label` 不可省——悬浮提示（`data-tip`）是鼠标增强，不是无障碍替代。
 - 入口页视觉只沿用报告自身的 cosmo 令牌（字体栈、`#373a3c` / `#e1e1e1` / 6px 圆角 / `#2780e3`）与 `assets/styles.css` 的品牌渐变，不新增第二套设计语言。字号五档、图标尺寸两档，全部集中在 `assets/site/hub.css` 顶部变量里；SVG 不写 `width`/`height`，由 CSS 定尺寸。
 - 入口页身份分三层：主题＝顶栏字标「TidyTuesday 可视化」（**不写作者名、不写「官方」**——本站是对官方数据的个人练习），作者只在八爪鱼/仓库链接的悬浮提示里，来源由各周报告自身的副标题承担。

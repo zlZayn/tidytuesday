@@ -1,58 +1,41 @@
-name: Regenerate site entry page
+name: Check site entry page
 
-# 职责：每次 push 到 main 后，重跑 code/update_site.R 生成根 index.html。
-#   - 生成的 index.html 直接 commit 回 main（用 GITHUB_TOKEN）
-#   - Vercel 通过 Git 集成监听 main，自动部署；本 workflow 不碰 Vercel
-#   - 只装 base R：update_site.R 无第三方依赖
+# 职责：push 后校验根 index.html 是否与 weeks/ 同步。
 #
-# 触发条件只有 push 与 workflow_dispatch，刻意不加 schedule：
-#   index.html 里含生成日期（generated），跨天定时重跑会产生日期变化 → 无意义 commit。
+# 为什么不再重跑 update_site.R（2026-10-02 改）：
+#   1. 兜底已前移到本地 —— .githooks/pre-commit 在提交触及 weeks/ 、assets/site/ 或
+#      code/update_site.R 时自动重跑 update_site.R 并把 index.html 并入本次提交。
+#   2. 原兜底代价过高 —— ubuntu-latest 不预装 R（R 只在 ubuntu-22.04 镜像），
+#      必须上 r-lib/actions/setup-r@v2，实测该步 27 s ~ 22 m35 s，而真正的脚本只跑 1 s。
+#   3. 历史收益为零 —— 它只产出过 1 个 bot commit（38556ee，368 行全改），
+#      而那是当时 CRLF 行尾 bug 造成的整份重写，不是补收录。
 #
-# 关于 commit 信息里的 [skip ci]：
-#   - 它只对 GitHub Actions 有意义（GitHub 据此跳过本次 push 触发的 workflow）；
-#     Vercel 不识别该标记，因此回写的 commit 仍会触发 Vercel 重新部署。
-#   - 递归防护其实已由 GITHUB_TOKEN 本身提供：用 GITHUB_TOKEN 发起的 push 事件
-#     不会再次触发 workflow，[skip ci] 是额外一层保险。
-#   - 例外：若 Vercel 后台 Git → Ignored Build Step 配了识别 [skip ci] 的脚本，
-#     回写的 commit 会被 Vercel 跳过（那是 Vercel 侧设置，不在本文件控制范围）。
-#     当前假设该设置未启用；若启用，改为不带 [skip ci] 的提交信息即可。
+# 本检查覆盖钩子挡不住的入口：GitHub 网页端编辑、带 --no-verify 的提交、
+#   以及在没跑过 git config core.hooksPath .githooks 的新 clone 上提交。
+#   runner 自带 Python，秒级完成。
+#
+# 注意：Vercel 经 Git 集成直接监听 main，不经过本 workflow，
+#       所以本检查红叉不阻断部署，它只是把「站点漏了一周」这件事变可见。
+#
+# 修复方式：本地跑 Rscript code/update_site.R 并提交 index.html。
 
 on:
   push:
     branches: [main]
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
 
 permissions:
-  contents: write # commit index.html 回 main 需要写权限
+  contents: read
 
 concurrency:
-  group: regenerate-index
+  group: check-site-index
   cancel-in-progress: true
 
 jobs:
-  regenerate:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # R 环境：跑 update_site.R 需要 base R（无第三方依赖）
-      - uses: r-lib/actions/setup-r@v2
-        with:
-          r-version: '4.3'
-
-      # 生成入口页（扫描 weeks/ 渲染抽屉列表；进入页面只加载最新一周）
-      - name: Generate index.html
-        run: Rscript code/update_site.R
-
-      # 只有真的变了才 commit，避免每次 push 都产生空提交
-      - name: Commit if changed
-        run: |
-          if git diff --quiet -- index.html; then
-            echo "index.html 无变化，跳过 commit"
-            exit 0
-          fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add index.html
-          git commit -m "chore(site): 重新生成 index.html [skip ci]"
-          git push
+      - name: Check index.html is in sync with weeks/
+        run: python3 code/check_site_index.py
