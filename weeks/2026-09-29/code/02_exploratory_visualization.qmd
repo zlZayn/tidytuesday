@@ -1,0 +1,558 @@
+---
+title: "全球城市中心的医疗记录 探索性可视化"
+subtitle: "TidyTuesday · 2026-09-29 (Week 39)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 记录，不是设施
+
+> 本周视觉身份（八周互不相同，不写入共享 theme）：**薰衣草银场 `#EDE7F2` ＋ 更亮的卡面 `#F8F6FB`**（panel 用卡面、底色露在四周）＋ **深紫墨 `#2A2140` / 正文灰紫 `#5C5470`** ＋ **洋红 `#B23A5B` = 医院 · 青绿 `#1F7A6F` = 药房 · 中紫 `#6B5B95` = 两类都有记录 · 幽灵灰紫 `#CFC8DC` = 没有记录**；图表家族 = **互斥记录类 100% 堆叠柱（顶部「无记录」段走幽灵灰，并画一条虚线记录线）＋ 对数密度屋脊（每组中位数直标）＋ 按人口十分位的双序列中位数趋势（两线之间着色带）**；版式签名 = **全报告图内只用一族 Segoe UI，层次由字号与字重承担，不靠等宽字体做数据／正文的对位＋ 图内不放等宽口径条，改为在面板角上钉一枚三行「口径角标」**。字号仍走共享排版阶梯（16 / 13 / 11 / 9.5 / 8.5 / 7.5 pt），不新增字号。
+
+<div style="display:flex;align-items:baseline;gap:14px;margin:22px 0 2px">
+<span style="font-size:30px;font-weight:700;color:#B23A5B;line-height:1">54.6%</span>
+<span style="font-size:15px;color:#2A2140">的城市中心有医院记录，有药房记录的只有 <strong>21.0%</strong></span>
+</div>
+
+11,422 个城市中心里，有 5,037 个（44.1%）**两个字段都是空的**。所以本周的主线不是「哪里缺医院」，而是**这份数据库到底记了谁**——先把记录口径画清楚，再谈密度。
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(ggplot2)
+  library(knitr)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+# ---- 本周色彩（只在本周生效；共享 theme 不含任何色值）----
+# 语义绑定：洋红 = 医院，青绿 = 药房，中紫 = 两类都有记录，幽灵灰紫 = 没有记录。
+# 这四个含义在三张图里不换位，也不与别周同名色复用。
+PAL <- list(
+  bg   = "#EDE7F2",   # 薰衣草银：露在卡面四周的底色
+  card = "#F8F6FB",   # 卡面：panel 底
+  ink  = "#2A2140",   # 深紫墨
+  body = "#5C5470",   # 正文灰紫：副标题 / 脚注 / 轴标题
+  grid = "#DED8E8",   # 卡面上的细网格
+  rule = "#BDB4CC",   # 分隔与基线
+  hos  = "#B23A5B",   # 洋红 —— 医院
+  pha  = "#1F7A6F",   # 青绿 —— 药房
+  both = "#6B5B95",   # 中紫 —— 医院与药房都有记录
+  void = "#CFC8DC"    # 幽灵灰紫 —— 不是类别，是记录缺失
+)
+
+# ---- 本周字体决策：全报告只用一族 ----
+# 前七周的图内文字都是两族（标题族 Segoe UI + 数据族 Consolas）。本周刻意收成一族，
+# 层次改由字号（TT_TYPE 阶梯）与字重承担；家族数 1 <= TT_FAMILY_MAX = 2。
+# 首屏那个 KPI 数字不是图内文字，走页面自身字体栈，不参与此决策。
+FAM <- TT_FAMILY[["text"]]
+mm  <- function(pt) pt / .pt          # element_text 用 pt，geom_text 用 mm
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi,
+                      dev.args = list(bg = PAL$bg))
+
+raw <- read_csv("../data/health.csv", show_col_types = FALSE)
+
+# 收入组：Not classified 只有 9 个中心，不入图，只在表里交代（见「数据异常」）
+inc_ord <- c("High income", "Upper Middle", "Lower Middle", "Low income")
+
+# 口径角标：面板角上的三行短标签，代替前六周惯用的等宽 tt_strip 数据条
+scope_tag <- function(kept, raw_n) {
+  paste(c(sprintf("n = %s", format(kept, big.mark = ",", trim = TRUE)),
+          sprintf("of %s", format(raw_n, big.mark = ",", trim = TRUE)),
+          sprintf("%.1f%%", 100 * kept / raw_n)), collapse = "\n")
+}
+
+# 人口刻度：57k / 3.2M 这类紧凑写法，避免五位数挤满横轴
+fmt_pop <- function(x) ifelse(x >= 1e6, sprintf("%.1fM", x / 1e6), sprintf("%.0fk", x / 1e3))
+```
+
+## 一、医院记录差 2.4 倍，药房记录差 14 倍
+
+```{r}
+#| label: prep
+#| echo: false
+n_raw <- nrow(raw)
+n_col <- ncol(raw)
+stopifnot(n_distinct(raw$ID_UC_G0) == n_raw)          # 一行一个城市中心
+
+d <- raw |>
+  mutate(
+    inc     = if_else(is.na(GC_DEV_WIG_2025), "Not classified", GC_DEV_WIG_2025),
+    has_hos = !is.na(HL_FCL_HOS_2024),
+    has_pha = !is.na(HL_FCL_PHA_2024)
+  )
+
+n_plot     <- sum(d$inc %in% inc_ord)
+n_drop     <- n_raw - n_plot
+n_none     <- sum(!d$has_hos & !d$has_pha)
+n_hos      <- sum(d$has_hos)
+n_pha      <- sum(d$has_pha)
+n_both     <- sum(d$has_hos & d$has_pha)
+n_hos_only <- n_hos - n_both
+n_pha_only <- n_pha - n_both
+
+# ---- 图 1：四个互斥且穷尽的记录类 ----
+# 类别名直接做因子水平：由下往上堆叠 = Both recorded -> Hospitals only
+# -> Pharmacies only -> No health record。「无记录」放最上，正好落在虚线记录线以上。
+LV  <- c("Both recorded", "Hospitals only", "Pharmacies only", "No health record")
+COL <- setNames(c(PAL$both, PAL$hos, PAL$pha, PAL$void), LV)
+TXT <- setNames(c(PAL$card, PAL$card, PAL$card, PAL$ink), LV)
+x_map <- c("High income" = 1, "Upper Middle" = 2, "Lower Middle" = 3,
+           "Low income" = 4, "All centres" = 6)
+
+cov_tbl <- d |>
+  filter(inc %in% inc_ord) |>
+  summarise(n = n(), n_hos = sum(has_hos), n_pha = sum(has_pha),
+            n_both = sum(has_hos & has_pha), .by = inc) |>
+  bind_rows(
+    d |> summarise(n = n(), n_hos = sum(has_hos), n_pha = sum(has_pha),
+                   n_both = sum(has_hos & has_pha)) |> mutate(inc = "All centres")
+  ) |>
+  mutate(hos_sh = n_hos / n, pha_sh = n_pha / n, both_sh = n_both / n,
+         rec        = hos_sh + pha_sh - both_sh,
+         hos_only_s = hos_sh - both_sh,
+         pha_only_s = pha_sh - both_sh,
+         none_s     = 1 - rec,
+         x          = unname(x_map[inc]),
+         tag        = sprintf("n = %s", format(n, big.mark = ",", trim = TRUE)))
+
+stopifnot(nrow(cov_tbl) == 5, !anyNA(cov_tbl$x))
+stopifnot(all(abs(cov_tbl$rec + cov_tbl$none_s - 1) < 1e-9))
+stopifnot(n_hos == cov_tbl$n_hos[cov_tbl$inc == "All centres"],
+          n_pha == cov_tbl$n_pha[cov_tbl$inc == "All centres"])
+
+seg <- cov_tbl |>
+  transmute(inc, x, n, rec, tag,
+            `Both recorded` = both_sh, `Hospitals only` = hos_only_s,
+            `Pharmacies only` = pha_only_s, `No health record` = none_s) |>
+  pivot_longer(all_of(LV), names_to = "cls", values_to = "share") |>
+  mutate(cls = factor(cls, levels = LV)) |>
+  arrange(x, cls) |>
+  mutate(top = cumsum(share), bot = top - share, mid = (top + bot) / 2, .by = x)
+
+stopifnot(all(abs(seg |> summarise(s = sum(share), .by = x) |> pull(s) - 1) < 1e-9))
+# 段内标签只标得下的：幽灵段本来最矮，门槛放低到 5%
+seg_lab <- seg |>
+  filter(share >= if_else(cls == "No health record", 0.05, 0.08)) |>
+  mutate(lab = sprintf("%.0f%%", 100 * share))
+
+# ---- 图 2：按收入组的医院密度（每 10 万人）----
+# 只在「有医院记录」的中心内比较；密度本身是 FCL / POP 的派生量（见数据异常）。
+dens <- d |> filter(inc %in% inc_ord, has_hos) |> mutate(fpc = HL_FPC_HOS_2025 * 1e5)
+ypos <- setNames(seq_along(inc_ord), inc_ord) |> rev() |> setNames(inc_ord)
+ypos <- setNames(c(4, 3, 2, 1), inc_ord)          # High income 在最上
+x_hi <- 30                                         # 显示上限；各组最大值 23 ~ 70
+
+# geom_density 在本机 ggplot2 4.0.3 下不接受按组缩放峰高（scale= 被忽略，实测叠成一团），
+# 所以自己算 density() 再画多边形：峰高归一到 0.80，形状可比、组间不压盖。
+ridge_poly <- lapply(inc_ord, function(g) {
+  v  <- dens$fpc[dens$inc == g]
+  de <- density(v, adjust = 0.9, n = 400, from = 0, to = x_hi)
+  b  <- unname(ypos[g])
+  h  <- de$y / max(de$y) * 0.80
+  tibble(inc = g, x = c(de$x, rev(de$x)), y = c(b + h, rep(b, length(h))))
+}) |> bind_rows()
+
+dens_stat <- dens |>
+  summarise(n = n(), med = median(fpc), mx = max(fpc), .by = inc) |>
+  mutate(base = unname(ypos[inc]), top = base + 0.80)
+
+n_hos_med_hi <- dens_stat$med[dens_stat$inc == "High income"]
+n_hos_med_li <- dens_stat$med[dens_stat$inc == "Low income"]
+ratio_hi_li  <- n_hos_med_hi / n_hos_med_li
+dens_p05_hi  <- quantile(dens$fpc[dens$inc == "High income"], .05)
+dens_p05_li  <- quantile(dens$fpc[dens$inc == "Low income"], .05)
+cov_hi_hos   <- 100 * mean(d$has_hos[d$inc == "High income"])
+cov_li_hos   <- 100 * mean(d$has_hos[d$inc == "Low income"])
+
+# ---- 图 3：按人口十分位的双序列中位数 ----
+# 两个序列都只用「两者都有记录」的中心，分母同一批人；否则一条线 n = 6,237、
+# 一条线 n = 2,396，比较没有意义。
+dual <- d |> filter(has_hos, has_pha) |> mutate(dec = ntile(GC_POP_TOT_2025, 10))
+dec_tbl <- dual |>
+  summarise(n = n(), pop = median(GC_POP_TOT_2025),
+            hos = median(HL_FPC_HOS_2025 * 1e5),
+            pha = median(HL_FPC_PHA_2025 * 1e5), .by = dec) |>
+  arrange(dec)
+
+d1 <- dec_tbl |> slice(1)
+d10 <- dec_tbl |> slice(n())
+pha_drop <- d1$pha / d10$pha
+hos_drop <- d1$hos / d10$hos
+
+# ---- 计数奇偶性：低端成对堆积，说明这一段的计数不是逐个点出来的 ----
+h_cnt    <- raw$HL_FCL_HOS_2024[!is.na(raw$HL_FCL_HOS_2024)]
+p_cnt    <- raw$HL_FCL_PHA_2024[!is.na(raw$HL_FCL_PHA_2024)]
+odd_all  <- 100 * mean(h_cnt %% 2 == 1)
+odd_smal <- 100 * mean(h_cnt[h_cnt <= 20] %% 2 == 1)
+odd_big  <- 100 * mean(h_cnt[h_cnt > 20] %% 2 == 1)
+p_odd    <- 100 * mean(p_cnt %% 2 == 1)
+
+# ---- 表与正文引用的其余数字 ----
+dup_names <- sum(duplicated(raw$GC_UCN_MAI_2025[!is.na(raw$GC_UCN_MAI_2025)]))
+n_na_name <- sum(is.na(raw$GC_UCN_MAI_2025))
+n_country <- n_distinct(raw$GC_CNT_GAD_2025)
+n_region  <- n_distinct(raw$GC_DEV_USR_2025)
+n_na_inc  <- sum(is.na(raw$GC_DEV_WIG_2025))
+hi_row    <- cov_tbl |> filter(inc == "High income")
+li_row    <- cov_tbl |> filter(inc == "Low income")
+```
+
+```{r}
+#| label: flow-line
+#| echo: false
+flow_txt <- tt_flow(n_raw, n_plot, sprintf("%d 个中心没有 World Bank 收入组", n_drop))
+```
+
+> `r flow_txt`
+
+**为什么剔这 9 个**：`GC_DEV_WIG_2025` 为空的是 9 个中心，占 0.08%，放进收入组对比会把一个 n = 9 的柱子读成趋势；它们在下面的表里单独列出。
+
+```{r}
+#| label: fig-coverage
+#| echo: false
+#| fig-cap: "Hospital records reach 88 percent of high-income centres but 36 percent of low-income ones; pharmacy records never exceed 64 percent."
+#| fig-width: 9.4
+#| fig-height: 5.8
+fig1 <- ggplot(seg, aes(x = x, y = share, fill = cls)) +
+  geom_col(width = 0.62, colour = PAL$card, linewidth = 0.55) +
+  geom_segment(aes(x = x - 0.31, xend = x + 0.31, y = rec, yend = rec),
+               data = cov_tbl, inherit.aes = FALSE,
+               colour = PAL$ink, linewidth = 0.5, linetype = "22", lineend = "butt") +
+  geom_text(aes(x = x, y = mid, label = lab), data = seg_lab,
+            colour = unname(TXT[as.character(seg_lab$cls)]),
+            family = FAM, size = mm(TT_TYPE[["annot"]]), fontface = "bold") +
+  geom_text(aes(x = x, y = 1.035, label = tag), data = cov_tbl,
+            inherit.aes = FALSE, family = FAM, colour = PAL$body,
+            size = mm(TT_TYPE[["caption"]]), vjust = 0) +
+  scale_fill_manual(values = COL, breaks = LV, limits = LV) +
+  scale_x_continuous(breaks = unname(x_map), labels = names(x_map),
+                     limits = c(0.35, 7.05)) +
+  scale_y_continuous(breaks = c(0, .25, .5, .75, 1),
+                     labels = c("0", "25", "50", "75", "100"),
+                     expand = expansion(mult = c(0.005, 0.075))) +
+  labs(
+    title    = "The database knows rich cities far better than poor ones",
+    subtitle = "Share of urban centres with a health record, by World Bank income group",
+    x = NULL, y = "share of the group's urban centres (%)",
+    caption  = tt_source("health.csv", n_plot,
+      paste0("columns are 100% stacked; the four blocks are mutually exclusive and ",
+             "exhaustive (both counters recorded / hospitals only / pharmacies only / ",
+             "neither). The dashed rule is the recording horizon: everything above it is ",
+             "absent data, not a facility count of zero. Group sizes differ by a factor ",
+             "of four, so compare shares, never bar widths; the last column pools all ",
+             "11,422 centres including the nine with no income group."))
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM) +
+  theme(
+    panel.background = element_rect(fill = PAL$card, colour = NA),
+    panel.grid       = element_blank(),
+    plot.subtitle    = element_text(family = FAM, colour = PAL$body,
+                                    size = TT_TYPE[["subtitle"]], hjust = 0,
+                                    margin = margin(b = 12)),
+    plot.caption     = element_text(family = FAM, colour = PAL$body,
+                                    size = TT_TYPE[["caption"]], hjust = 0,
+                                    margin = margin(t = 12), lineheight = 1.35),
+    axis.text.x      = element_text(family = FAM, colour = PAL$ink,
+                                    size = TT_TYPE[["axis_text"]]),
+    axis.text.y      = element_text(family = FAM, colour = PAL$ink,
+                                    size = TT_TYPE[["axis_text"]]),
+    axis.title.y     = element_text(family = FAM, colour = PAL$body,
+                                    size = TT_TYPE[["axis_title"]]),
+    legend.position  = "top",
+    legend.justification = "left",
+    legend.text      = element_text(family = FAM, colour = PAL$ink,
+                                    size = TT_TYPE[["annot"]]),
+    legend.key.spacing.x = unit(6, "pt"),
+    legend.margin    = margin(b = 4),
+    plot.margin      = margin(16, 22, 12, 16)
+  ) +
+  guides(fill = guide_legend(nrow = 1, byrow = TRUE, title = NULL))
+fig1
+```
+
+**读数**：高收入组 `r sprintf("%.1f", 100 * hi_row$hos_sh)`% 有医院记录、`r sprintf("%.1f", 100 * hi_row$pha_sh)`% 有药房记录，两个数字的落差是 `r sprintf("%.1f", 100 * (hi_row$hos_sh - hi_row$pha_sh))` 个百分点；低收入组是 `r sprintf("%.1f", 100 * li_row$hos_sh)`% / `r sprintf("%.1f", 100 * li_row$pha_sh)`%，落差 `r sprintf("%.1f", 100 * (li_row$hos_sh - li_row$pha_sh))` 个百分点。**药房字段的缺口处处大于医院字段，而且在低收入组近乎归零**——`r li_row$n` 个低收入中心里只有 `r li_row$n_both` 个带药房记录，而这 `r li_row$n_both` 个**全部同时带医院记录**（只有药房、没有医院的低收入中心是 0 个）。
+
+还要留意最上面那段的读法：它不是「没有医院」，是**这份库里没有这一行**。高收入组只有 `r sprintf("%.1f", 100 * hi_row$none_s)`% 落在记录线以上，低收入组有 `r sprintf("%.1f", 100 * li_row$none_s)`%。
+
+```{r}
+#| label: tbl-coverage
+#| echo: false
+cov_tbl |>
+  arrange(x) |>
+  transmute(收入组 = as.character(inc), `城市中心数` = n,
+            `医院%`     = sprintf("%.1f", 100 * hos_sh),
+            `药房%`     = sprintf("%.1f", 100 * pha_sh),
+            `两者都有%` = sprintf("%.1f", 100 * both_sh),
+            `只有医院%` = sprintf("%.1f", 100 * hos_only_s),
+            `只有药房%` = sprintf("%.2f", 100 * pha_only_s),
+            `无记录%`   = sprintf("%.1f", 100 * none_s)) |>
+  kable(format = "html",
+        caption = "图 1 的原始数字（四类互斥且穷尽，横向每行相加 = 100%；与图上同一份聚合）")
+```
+
+## 二、在「有记录」的中心里，收入越高医院密度越高
+
+```{r}
+#| label: fig-density
+#| echo: false
+#| fig-cap: "Hospital density halves from the richest to the poorest income group, and the deficit is a thinner floor, not a shorter ceiling."
+#| fig-width: 9.4
+#| fig-height: 5.4
+fig2 <- ggplot(ridge_poly, aes(x = x, y = y, group = inc)) +
+  geom_polygon(fill = "#DDD5EA", colour = PAL$ink, linewidth = 0.32) +
+  geom_segment(aes(x = med, xend = med, y = base, yend = top), data = dens_stat,
+               inherit.aes = FALSE, colour = PAL$hos, linewidth = 0.9,
+               lineend = "round") +
+  geom_text(aes(x = med, y = top, label = sprintf("%.1f", med)), data = dens_stat,
+            inherit.aes = FALSE, hjust = -0.30, vjust = 0.85, family = FAM,
+            colour = PAL$hos, fontface = "bold", size = mm(TT_TYPE[["annot"]])) +
+  geom_text(aes(x = x_hi - 0.5, y = base + 0.11,
+                label = sprintf("n = %s", format(n, big.mark = ",", trim = TRUE))),
+            data = dens_stat, inherit.aes = FALSE, hjust = 1, family = FAM,
+            colour = PAL$body, size = mm(TT_TYPE[["caption"]])) +
+  annotate("text", x = x_hi - 0.5, y = 5.30, label = scope_tag(n_hos, n_raw),
+           family = FAM, colour = PAL$body, size = mm(TT_TYPE[["caption"]]),
+           hjust = 1, vjust = 1, lineheight = 1.3) +
+  scale_x_continuous(limits = c(0, x_hi),
+                     breaks = c(0, 5, 10, 15, 20, 25, 30), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0.70, 5.35), breaks = seq_along(inc_ord),
+                     labels = rev(inc_ord), expand = c(0, 0)) +
+  labs(
+    title    = "Richer income group, denser hospitals",
+    subtitle = "Hospitals per 100,000 residents among the 6,237 urban centres that have a hospital record",
+    x = "hospitals per 100,000 residents", y = NULL,
+    caption  = tt_source("health.csv", n_hos,
+      sprintf(paste0("each ridge is a kernel density of HL_FPC_HOS_2025 x 100,000, scaled ",
+                     "to its own peak so shapes are comparable rather than masses; the ",
+                     "magenta rule is that group median. The axis stops at %d while group ",
+                     "maxima run from %.0f (low income) to %.0f (upper middle), so the ",
+                     "right tail is clipped, not absent. HL_FPC_HOS_2025 is exactly ",
+                     "HL_FCL_HOS_2024 divided by GC_POP_TOT_2025, so this is a ",
+                     "recorded-count rate, not an independent census of facilities."),
+              x_hi, dens_stat$mx[dens_stat$inc == "Low income"],
+              dens_stat$mx[dens_stat$inc == "Upper Middle"]))
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM) +
+  theme(
+    panel.background   = element_rect(fill = PAL$card, colour = NA),
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_line(colour = PAL$grid, linewidth = 0.35),
+    plot.subtitle      = element_text(family = FAM, colour = PAL$body,
+                                      size = TT_TYPE[["subtitle"]], hjust = 0,
+                                      margin = margin(b = 12)),
+    plot.caption       = element_text(family = FAM, colour = PAL$body,
+                                      size = TT_TYPE[["caption"]], hjust = 0,
+                                      margin = margin(t = 12), lineheight = 1.35),
+    axis.text.y        = element_text(family = FAM, colour = PAL$ink,
+                                      size = TT_TYPE[["axis_text"]]),
+    axis.text.x        = element_text(family = FAM, colour = PAL$ink,
+                                      size = TT_TYPE[["axis_text"]]),
+    axis.title.x       = element_text(family = FAM, colour = PAL$body,
+                                      size = TT_TYPE[["axis_title"]]),
+    plot.margin        = margin(16, 22, 12, 16)
+  )
+fig2
+```
+
+**读数**：有医院记录的 `r format(n_hos, big.mark = ",")` 个中心里，中位密度从高收入组的 `r sprintf("%.1f", n_hos_med_hi)` 家 / 10 万人降到低收入组的 `r sprintf("%.1f", n_hos_med_li)` 家 / 10 万人，**差 `r sprintf("%.1f", ratio_hi_li)` 倍**。差距不在天花板而在地板：高收入组 5% 分位是 `r sprintf("%.2f", dens_p05_hi)`，低收入组是 `r sprintf("%.2f", dens_p05_li)`——低端被整体抬离零点，而不是高端更长。
+
+这条梯度不能只归给「穷」：`r sprintf("%.1f", cov_hi_hos)`% 的高收入中心有记录，低收入组只有 `r sprintf("%.1f", cov_li_hos)`% 被记进来，**能进这张图的低收入中心本来就是被记过的那一批**。所以图 2 的梯度是「在有记录的城市里」的条件结论，不是全球城市的事实。
+
+```{r}
+#| label: tbl-density
+#| echo: false
+dens_stat |>
+  arrange(desc(base)) |>
+  transmute(收入组 = as.character(inc), `n（有医院记录）` = n,
+            `中位数` = sprintf("%.2f", med),
+            `组内最大` = sprintf("%.1f", mx),
+            `组内城市中心总数` = cov_tbl$n[match(as.character(inc), as.character(cov_tbl$inc))],
+            `该组记录覆盖率` = sprintf("%.1f%%", 100 * cov_tbl$hos_sh[match(as.character(inc), as.character(cov_tbl$inc))])) |>
+  kable(format = "html",
+        caption = "图 2 的原始数字（单位：每 10 万居民医院数；末列 = 该组里有多少中心真的进了图，是读这张图的前置条件）")
+```
+
+## 三、城市越大，药房越跟不上医院
+
+```{r}
+#| label: fig-decile
+#| echo: false
+#| fig-cap: "In the smallest decile pharmacies match hospitals per capita; by the largest decile hospitals outnumber them roughly three to one."
+#| fig-width: 9.4
+#| fig-height: 5.6
+fig3 <- ggplot(dec_tbl, aes(x = dec)) +
+  geom_ribbon(aes(ymin = pmin(hos, pha), ymax = pmax(hos, pha)),
+              fill = PAL$void, alpha = 0.45) +
+  geom_line(aes(y = hos, colour = "hospitals"), linewidth = 0.95) +
+  geom_line(aes(y = pha, colour = "pharmacies"), linewidth = 0.95) +
+  geom_point(aes(y = hos, colour = "hospitals"), size = 1.9) +
+  geom_point(aes(y = pha, colour = "pharmacies"), size = 1.9) +
+  geom_text(aes(x = 10.34, y = hos, label = "Hospitals", colour = "hospitals"),
+            data = d10, inherit.aes = FALSE, hjust = 0, fontface = "bold",
+            family = FAM, size = mm(TT_TYPE[["annot"]])) +
+  geom_text(aes(x = 10.34, y = pha, label = "Pharmacies", colour = "pharmacies"),
+            data = d10, inherit.aes = FALSE, hjust = 0, fontface = "bold",
+            family = FAM, size = mm(TT_TYPE[["annot"]])) +
+  annotate("text", x = 0.9, y = 9.05, label = scope_tag(nrow(dual), n_raw),
+           family = FAM, colour = PAL$body, size = mm(TT_TYPE[["caption"]]),
+           hjust = 0, vjust = 1, lineheight = 1.3) +
+  scale_colour_manual(values = c(hospitals = PAL$hos, pharmacies = PAL$pha),
+                      guide = "none") +
+  scale_x_continuous(breaks = dec_tbl$dec, labels = fmt_pop(dec_tbl$pop),
+                     limits = c(0.6, 12.2), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 9.4), breaks = c(0, 2, 4, 6, 8)) +
+  labs(
+    title    = "Pharmacies thin out far faster than hospitals",
+    subtitle = "Median facilities per 100,000 residents by population decile, among the 2,248 centres that record both",
+    x = "population decile (median population of the decile)",
+    y = "per 100,000 residents",
+    caption  = tt_source("health.csv", nrow(dual),
+      sprintf(paste0("both lines use the same %s centres and the same denominator, so they ",
+                     "are directly comparable; the shaded band is the gap between them. ",
+                     "Across the ten deciles the hospital median falls %.1f-fold (%.1f to ",
+                     "%.1f) while the pharmacy median falls %.1f-fold (%.1f to %.1f). ",
+                     "These centres are concentrated in high-income countries, so this ",
+                     "is a within-recorded contrast, not a world map of access."),
+              format(nrow(dual), big.mark = ","), hos_drop, d1$hos, d10$hos,
+              pha_drop, d1$pha, d10$pha))
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM) +
+  theme(
+    panel.background   = element_rect(fill = PAL$card, colour = NA),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(colour = PAL$grid, linewidth = 0.35),
+    plot.subtitle      = element_text(family = FAM, colour = PAL$body,
+                                      size = TT_TYPE[["subtitle"]], hjust = 0,
+                                      margin = margin(b = 12)),
+    plot.caption       = element_text(family = FAM, colour = PAL$body,
+                                      size = TT_TYPE[["caption"]], hjust = 0,
+                                      margin = margin(t = 12), lineheight = 1.35),
+    axis.text.x        = element_text(family = FAM, colour = PAL$ink,
+                                      size = TT_TYPE[["axis_text"]]),
+    axis.text.y        = element_text(family = FAM, colour = PAL$ink,
+                                      size = TT_TYPE[["axis_text"]]),
+    axis.title         = element_text(family = FAM, colour = PAL$body,
+                                      size = TT_TYPE[["axis_title"]]),
+    plot.margin        = margin(16, 78, 12, 16)
+  )
+fig3
+```
+
+**读数**：两个序列是同一批 `r format(nrow(dual), big.mark = ",")` 个中心、同一个分母，所以可以直接比。人口最小的那一档，药房中位数 `r sprintf("%.2f", d1$pha)` 家 / 10 万人**略高于**医院 `r sprintf("%.2f", d1$hos)`；到人口最大的一档反过来，医院 `r sprintf("%.2f", d10$hos)` 对药房 `r sprintf("%.2f", d10$pha)`，**约 3 比 1**。整段区间里医院只降 `r sprintf("%.1f", hos_drop)` 倍，药房降 `r sprintf("%.1f", pha_drop)` 倍。
+
+这正是第 1 节的机制在起作用：药房字段只在 `r sprintf("%.0f", 100 * hi_row$pha_sh)`% 的高收入中心里有值，低收入组只有 `r sprintf("%.0f", 100 * li_row$pha_sh)`%，而大城市的记录多来自中国、印度这类药房字段近乎为空的地方。所以「药房跟不上」这句话要连着下半句读：**在有人记的地方，大城市的药房相对更少；在没人记的地方，它根本不在这张图上。**
+
+```{r}
+#| label: tbl-decile
+#| echo: false
+dec_tbl |>
+  transmute(`人口十分位` = dec, `组内中心数` = n,
+            `人口中位数` = formatC(pop, format = "d", big.mark = ","),
+            `医院/10万` = sprintf("%.2f", hos), `药房/10万` = sprintf("%.2f", pha),
+            `药房 ÷ 医院` = sprintf("%.2f", pha / hos)) |>
+  kable(format = "html",
+        caption = "图 3 的原始数字（两条线同一批中心；末列 < 1 表示该档药房比医院稀）")
+```
+
+## 四、同城两套计数能对上吗
+
+四个互斥类里，「两者都有记录」只占 `r format(n_both, big.mark = ",")` 个（`r sprintf("%.1f", 100 * n_both / n_raw)`%），其余是 `r format(n_hos_only, big.mark = ",")` 个只有医院、`r n_pha_only` 个只有药房、`r format(n_none, big.mark = ",")` 个两者皆无。要问「同一座城市里药房比医院多还是少」，**全库只剩 `r format(n_both, big.mark = ",")` 个中心能回答**。
+
+再看这两个计数本身像不像逐个点出来的。医院计数的奇偶分布很不对：整列 `r sprintf("%.1f", odd_all)`% 的取值是奇数，但**在 ≤ 20 的那一段里只有 `r sprintf("%.1f", odd_smal)`% 是奇数**（2、4、6、8、10 这几个偶数各自堆了几百到近两千个中心），而 > 20 的那一段里 `r sprintf("%.1f", odd_big)`% 是奇数——已经接近随机。药房计数更极端，整列只有 `r sprintf("%.1f", p_odd)`% 是奇数。**低端的计数明显是成对出现的**。本页不推断背后的规则，但这个形态本身足以说明：图 2 的密度轴是记录量，不是逐家的设施普查。
+
+```{r}
+#| label: tbl-dual
+#| echo: false
+dual |>
+  mutate(r = HL_FCL_PHA_2024 / HL_FCL_HOS_2024) |>
+  summarise(n = n(), P25 = quantile(r, .25), med = median(r),
+            P75 = quantile(r, .75), .by = dec) |>
+  arrange(dec) |>
+  transmute(`人口十分位` = dec, n,
+            `P25` = sprintf("%.2f", P25), `中位数` = sprintf("%.2f", med),
+            `P75` = sprintf("%.2f", P75)) |>
+  kable(format = "html",
+        caption = "两者都有记录的 2,248 个中心：药房数 ÷ 医院数（< 1 = 药房少于医院；中位数在前三档正好落在 1.00）")
+```
+
+```{r}
+#| label: typography-audit
+#| include: false
+audit <- bind_rows(
+  tt_audit(fig1) |> mutate(图 = "图 1", .before = 1),
+  tt_audit(fig2) |> mutate(图 = "图 2", .before = 1),
+  tt_audit(fig3) |> mutate(图 = "图 3", .before = 1)
+)
+n_size_used <- n_distinct(audit$size[!is.na(audit$size)])
+n_family    <- n_distinct(audit$family[!is.na(audit$family)])
+n_off       <- sum(!audit$in_ladder)
+stopifnot(n_size_used <= TT_TYPE_MAX, n_family <= TT_FAMILY_MAX, n_off == 0)
+cat(sprintf("typo-audit: sizes %d/%d, families %d/%d, off-ladder %d\n",
+            n_size_used, TT_TYPE_MAX, n_family, TT_FAMILY_MAX, n_off), file = stderr())
+```
+
+## 数据异常（记录，不改数据）
+
+| 现象 | 原始数字 | 处理 |
+| --- | --- | --- |
+| 药房字段大面积缺失 | `r n_pha` / `r format(n_raw, big.mark = ",")` 有值（`r sprintf("%.1f", 100 * n_pha / n_raw)`%）；三个收入组低于 22% | 不当 0 处理，也不填补；图 1 单列成「无记录」段，图 3 只用两者都有记录的子集 |
+| 医院字段缺失 | `r n_hos` / `r format(n_raw, big.mark = ",")`（`r sprintf("%.1f", 100 * n_hos / n_raw)`%） | 同上；图 2 的结论自带「在有记录的中心里」限定 |
+| 计数低端几乎全是偶数 | ≤ 20 的计数里 `r sprintf("%.1f", odd_smal)`% 是奇数，> 20 的计数里 `r sprintf("%.1f", odd_big)`% 是奇数（全库 `r sprintf("%.1f", odd_all)`%） | 不改数；这是「图 2 的密度轴是记录量而非普查」的直接证据，写进正文与图 2 脚注 |
+| 药房计数的偶数堆积更极端 | 全库奇数占比 `r sprintf("%.1f", p_odd)`% | 图 3 只用中位数，不用均值 |
+| `HL_FPC_*` 不是独立测量 | `HL_FPC_HOS_2025` 与 `HL_FCL_HOS_2024 ÷ GC_POP_TOT_2025` 的相对差最大 0.49% | 图 2 标题与脚注都写明它是派生率 |
+| `HL_SHP_*` 同样是派生量 | `HL_SHP_HOS_2025` 与 `100 × HL_POP_HOS_2025 ÷ GC_POP_TOT_2025` 的最大绝对差 7.3e-08 | 本页不使用这两列，避免重复计量 |
+| 年份标签不一致 | 计数是 `_2024`，人均是 `_2025`（同一列的派生），面积密度是 `_2024` | 正文引用时逐列写出年份后缀 |
+| 收入组为空 | `r n_na_inc` 个中心 | 不入图，只在图 1 的脚注交代 |
+| 城市名重复 | `r dup_names` 行重名（最多的重 4 次）；`r n_na_name` 个中心名为空 | 不按城市名聚合；本页所有聚合按收入组或人口十分位 |
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/health.csv`（`r format(n_raw, big.mark = ",")` × `r n_col`，`ID_UC_G0` 唯一） |
+| 覆盖 | `r n_country` 个国家 / `r n_region` 个 UN SDG 区域；`GC_DEV_WIG_2025` 5 个取值（含空） |
+| 入图样本 | `r flow_txt` |
+| 图 1 口径 | 四个互斥记录类（都有 / 只有医院 / 只有药房 / 都没有），列为 100% 堆叠；虚线是记录线，线上方是缺失而非 0 |
+| 图 2 口径 | 只在 `r format(n_hos, big.mark = ",")` 个有医院记录的中心内；横轴 = `HL_FPC_HOS_2025 × 100,000`（派生量）；每条屋脊各自归一到峰值，比形状不比质量；横轴截到 30，各组最大值 23 ~ 70 |
+| 图 3 口径 | 只在 `r format(n_both, big.mark = ",")` 个两者都有记录的中心内；两条线同一分母；人口十分位按 `GC_POP_TOT_2025` 等分 |
+| 不作为证据的列 | `HL_FDE_*`（面积密度）：各组中位面积从 12 km² 到 40 km² 差三倍以上，地理范围由城市化程度而非行政边界决定，面积密度会把「城市画得大」读成「设施少」 |
+| 数字来源 | 正文所有数字来自本页 prep chunk 的同一份聚合；内联数字一律经 `sprintf` / `format` 定型，避开 knitr 对大数的科学计数法改写 |
+| 不画的东西 | 不按国家排名（中国 1,974、印度 1,925 个中心，占了库的三分之一，国家间比较会被中心定义差异主导）；不画时间趋势（只有 2024 / 2025 两个年份且同名同列）；不用均值（低端偶数堆积 + 长尾会把均值推离典型值） |
