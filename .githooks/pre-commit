@@ -1,0 +1,59 @@
+#!/bin/sh
+# ==============================================================================
+# .githooks/pre-commit —— 保证 index.html 不会漏更新
+# ------------------------------------------------------------------------------
+# 为什么需要：根 index.html 由 code/update_site.R 生成。新增一周后如果忘了跑它，
+#   站点会静默漏掉那一周——页面照常打开，只是少了一周，属于最难发现的故障。
+#
+# 做法：本次提交只要触及 weeks/ 、assets/site/ 或 code/update_site.R，
+#   就先重跑 update_site.R，并把结果加进本次提交。忘记跑不会发生。
+#
+# 触发是精确的：纯文档/代码提交不会白跑，也不会因为日期跨天而平白改写生成日期。
+#
+# 安装（每个 clone 各做一次，core.hooksPath 是本地配置、不随仓库同步）：
+#     git config core.hooksPath .githooks
+#
+# 绕过：git commit --no-verify（不推荐；绕过后请手动跑 Rscript code/update_site.R）
+# ==============================================================================
+
+set -e
+
+# --- 本次提交是否触及需要重生成 index.html 的路径 ---
+if ! git diff --cached --name-only --diff-filter=ACMR \
+     | grep -qE '^(weeks/|assets/site/|code/update_site\.R$)'; then
+  exit 0
+fi
+
+# --- 环境检查：找不到 Rscript 时必须挡住，而不是静默放行一个过期的 index.html ---
+if ! command -v Rscript >/dev/null 2>&1; then
+  echo "" >&2
+  echo "pre-commit: 找不到 Rscript，无法重生成 index.html。" >&2
+  echo "  本次提交触及了 weeks/ 或 assets/site/，直接提交会让站点漏掉这一周。" >&2
+  echo "" >&2
+  echo "  装上 R 后重试；或确认 index.html 已是最新后绕过：" >&2
+  echo "    git commit --no-verify" >&2
+  echo "" >&2
+  exit 1
+fi
+
+# --- 重生成，并比较工作区内容是否真的变了 ---
+# 必须先清掉 LC_CTYPE：git 跑钩子时会 export LC_CTYPE=C.UTF-8，而 Windows 上的 R
+# 认不出这个值（会警告 "Setting LC_CTYPE=C.UTF-8 failed"），于是按非 UTF-8 处理，
+# 直接把中文标题喂给 gsub() 时报 "'replacement' is invalid UTF-8" 并中断。
+# 实测：export LC_CTYPE=C.UTF-8 必崩；unset 后正常。这是本钩子在 Windows 上的前提。
+unset LC_CTYPE
+unset LC_ALL
+unset LANG
+
+before=$(git hash-object index.html 2>/dev/null || echo none)
+
+Rscript code/update_site.R >/dev/null
+
+after=$(git hash-object index.html 2>/dev/null || echo none)
+
+if [ "$before" != "$after" ]; then
+  git add index.html
+  echo "pre-commit: index.html 已重新生成，并已加入本次提交"
+fi
+
+exit 0
