@@ -1,0 +1,646 @@
+---
+title: "城市绿地占比：顶端被削平，不是整体变绿"
+subtitle: "TidyTuesday · 2026-09-22 (Week 38)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 顶端被削平，而不是整体变绿
+
+<div style="display:flex;align-items:baseline;gap:14px;margin:22px 0 2px;flex-wrap:wrap">
+<span style="font-size:30px;font-weight:700;color:#C4601A;line-height:1">145 / 1,112</span>
+<span style="font-size:15px;color:#1E4A3C">座城市在 2025 年还有记录（<strong>13.0%</strong>）；而这两端都有数的 145 座里，绿地占比超过 40% 的城市从 <strong>11 座掉到 0 座</strong></span>
+</div>
+
+这份库里「没有值」和「值为 0」是两件事，而且 2025 那一列有 **87%** 的行是空的。先把「谁真的被记了两次」这件事画清楚，再谈绿地是多还是少——否则任何一条「全球城市在变绿 / 变秃」的趋势线，都是把不同的城市串在同一根线上。
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(ggplot2)
+  library(knitr)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+# ---- 本周色彩（只在本周生效；共享 theme 不含任何色值）----
+# 语义绑定：深松绿墨 = 主序列 / 绿地增加方向；烧琥珀 = 绿地减少方向；
+# 幽灵灰绿 = 没有被记录的那一侧与 1990 端点。三个含义在三张图里不换位。
+PAL <- list(
+  bg   = "#FAFAF7",   # 纸面级近白：底色即面板，无卡面
+  ink  = "#1E4A3C",   # 深松绿墨：主序列、绿地增加方向、图内直标
+  body = "#5A6B60",   # 灰绿正文：副标题 / 脚注 / 轴标题
+  grid = "#E7E9E2",   # 纸面上的唯一一组水平细网格
+  rule = "#C3CBC0",   # 基线与分隔
+  fade = "#B9C6BC",   # 幽灵灰绿：没被记录的年份、1990 端点
+  band = "#DCE4DA",   # 分位带填充（同一绿族的低饱和版）
+  loss = "#C4601A"    # 烧琥珀：唯一的暖强调色，只标「绿地减少」方向
+)
+
+# ---- 本周字体决策：两族分工 ----
+# 标题走 Georgia 衬线（纸面质感），数据、轴、注记走 Segoe UI。
+# 家族数 2 = TT_FAMILY_MAX，不新增第三套。首屏 KPI 不是图内文字，走页面自身字体栈。
+GEO <- "Georgia"
+FAM <- TT_FAMILY[["text"]]
+mm  <- function(pt) pt / .pt
+
+# 纸面主题：无卡面，panel 与页面同色，只留一条水平细网格
+paper <- function() {
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM) +
+    ggplot2::theme(
+      plot.background       = ggplot2::element_rect(fill = PAL$bg, colour = NA),
+      panel.background      = ggplot2::element_rect(fill = PAL$bg, colour = NA),
+      panel.grid.major.y    = ggplot2::element_line(colour = PAL$grid, linewidth = 0.35),
+      panel.grid.major.x    = ggplot2::element_blank(),
+      panel.grid.minor      = ggplot2::element_blank(),
+      plot.title.position   = "plot",
+      plot.caption.position = "plot",
+      plot.title    = ggplot2::element_text(family = GEO, face = "bold", colour = PAL$ink,
+                                            size = TT_TYPE[["title"]], hjust = 0,
+                                            margin = ggplot2::margin(b = 5)),
+      plot.subtitle = ggplot2::element_text(family = FAM, colour = PAL$body,
+                                            size = TT_TYPE[["subtitle"]], hjust = 0,
+                                            margin = ggplot2::margin(b = 11)),
+      plot.caption  = ggplot2::element_text(family = FAM, colour = PAL$body,
+                                            size = TT_TYPE[["caption"]], hjust = 0,
+                                            margin = ggplot2::margin(t = 12), lineheight = 1.35),
+      axis.text     = ggplot2::element_text(family = FAM, colour = PAL$body,
+                                            size = TT_TYPE[["axis_text"]]),
+      axis.title    = ggplot2::element_text(family = FAM, colour = PAL$body,
+                                            size = TT_TYPE[["axis_title"]]),
+      plot.margin   = ggplot2::margin(16, 24, 12, 16)
+    )
+}
+
+fmt_n <- function(x) format(x, big.mark = ",", trim = TRUE)
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi,
+                      dev.args = list(bg = PAL$bg))
+
+raw <- read_csv("../data/urban.csv", show_col_types = FALSE)
+```
+
+## 一、先看口径：2025 年只剩 145 座城市
+
+```{r}
+#| label: prep
+#| echo: false
+n_raw <- nrow(raw)
+n_col <- ncol(raw)
+yrs   <- sort(unique(raw$year))
+y0    <- min(yrs)
+y25   <- max(yrs)
+stopifnot(identical(as.integer(yrs), c(1990L, 2000L, 2010L, 2020L, 2025L)))
+
+# 表里混着两类行：城市行（有 cityCode）与区域汇总行（cityCode / cityName / sdgSubRegion 全空）。
+# 汇总行不是城市，任何城市级聚合都必须先剔除，否则 Global Average 会被当成一座城市参与排序。
+is_city <- !is.na(raw$cityCode)
+city <- raw[is_city, ]
+aggr <- raw[!is_city, ]
+n_aggr <- nrow(aggr)
+n_city <- n_distinct(city$cityCode)
+n_ctry <- n_distinct(city$countryOrTerritoryName)
+stopifnot(n_distinct(city$cityCode, city$year) == nrow(city))   # 一城一年一行
+
+# 平衡面板：两个端点都有值的那批城市。这是本页唯一能做同城前后对比的样本。
+panel_ids <- city |>
+  filter(year == y25, !is.na(averageShareOfGreenAreaInCityUrbanAreaPct)) |>
+  pull(cityCode)
+n_panel <- length(panel_ids)
+n_rest  <- n_city - n_panel
+
+n_na25_share <- sum(is.na(city$averageShareOfGreenAreaInCityUrbanAreaPct[city$year == y25]))
+n_na25_pc    <- sum(is.na(city$greenAreaPerCapitaM2[city$year == y25]))
+n_na25_all   <- sum(is.na(raw$averageShareOfGreenAreaInCityUrbanAreaPct[raw$year == y25]))
+n_row25      <- sum(raw$year == y25)
+n_ctry_panel <- n_distinct(city$countryOrTerritoryName[city$cityCode %in% panel_ids])
+n_zero       <- sum(city$averageShareOfGreenAreaInCityUrbanAreaPct == 0, na.rm = TRUE)
+
+# ---- 图 1：两条中位线 + 各自 P25–P75 分位带 ----
+band <- city |>
+  mutate(grp = if_else(cityCode %in% panel_ids, "panel", "rest")) |>
+  filter(!is.na(averageShareOfGreenAreaInCityUrbanAreaPct)) |>
+  summarise(n = n(),
+            p25 = quantile(averageShareOfGreenAreaInCityUrbanAreaPct, .25),
+            med = median(averageShareOfGreenAreaInCityUrbanAreaPct),
+            p75 = quantile(averageShareOfGreenAreaInCityUrbanAreaPct, .75),
+            .by = c(grp, year)) |>
+  arrange(grp, year)
+n_band_rows <- sum(band$n)
+n_band_drop <- nrow(city) - n_band_rows
+stopifnot(n_band_drop == n_na25_share,
+          n_distinct(band$grp) == 2)
+
+ends <- band |> group_by(grp) |> slice_max(year, n = 1) |> ungroup() |>
+  transmute(grp, yr = year, med)
+med_p90 <- band$med[band$grp == "panel" & band$year == y0]
+med_p00 <- band$med[band$grp == "panel" & band$year == 2000]
+med_p25 <- band$med[band$grp == "panel" & band$year == y25]
+med_r90 <- band$med[band$grp == "rest"  & band$year == y0]
+med_r20 <- band$med[band$grp == "rest"  & band$year == 2020]
+stopifnot(all(lengths(list(med_p90, med_p00, med_p25, med_r90, med_r20)) == 1))
+
+# ---- 图 2：两端斜坡（同城 1990 vs 2025）----
+wide <- city |>
+  filter(cityCode %in% panel_ids, year %in% c(y0, y25)) |>
+  select(cityCode, cityName, countryOrTerritoryName, sdgRegion, year,
+         share = averageShareOfGreenAreaInCityUrbanAreaPct, pc = greenAreaPerCapitaM2) |>
+  pivot_wider(names_from = year, values_from = c(share, pc))
+stopifnot(nrow(wide) == n_panel, !anyNA(wide$share_1990), !anyNA(wide$share_2025))
+
+slope <- wide |>
+  mutate(delta = share_2025 - share_1990,
+         gain  = delta > 0,
+         big_lab = sprintf("%s  %.1f\u2192%.1f", cityName, share_1990, share_2025))
+
+n_up    <- sum(slope$gain)
+n_down  <- sum(!slope$gain)
+sd_90   <- sd(slope$share_1990)
+sd_25   <- sd(slope$share_2025)
+mean_90 <- mean(slope$share_1990)
+mean_25 <- mean(slope$share_2025)
+med_s90 <- median(slope$share_1990)
+med_s25 <- median(slope$share_2025)
+max_90  <- max(slope$share_1990)
+max_25  <- max(slope$share_2025)
+n_40_90 <- sum(slope$share_1990 > 40)
+n_40_25 <- sum(slope$share_2025 > 40)
+r_conv  <- cor(slope$delta, slope$share_1990)
+n_drop10 <- sum(slope$delta <= -10)
+n_rise10 <- sum(slope$delta >= 10)
+
+# 直标挑谁：跌得最狠的 3 座 + 涨得最多的 2 座。五座在 1990 端的间距都 ≥ 5pp，不叠。
+hi <- bind_rows(slice_min(slope, delta, n = 3), slice_max(slope, delta, n = 2)) |>
+  arrange(share_1990) |>
+  mutate(x_lab = 0.94,
+         hi_dir = factor(if_else(gain, "gain", "loss"), levels = c("gain", "loss")))
+stopifnot(nrow(hi) == 5, min(diff(sort(hi$share_1990))) > 5)
+hi_delta <- setNames(hi$delta, hi$cityName)
+top25 <- slope |> slice_max(share_2025, n = 3)
+
+# ---- 图 3：城市规模分箱哑铃 ----
+# 派生列：100 × 人均绿地 ÷ 绿地占比 = 每位居民对应的城市面积（m² / 人）。
+# 这个量不在原始数据里，是本周唯一自造的列，用途只有一个——把「摊得开 / 挤得紧」分开。
+dens <- slope |> mutate(area_pc = 100 * pc_1990 / share_1990) |> filter(is.finite(area_pc))
+n_dens  <- nrow(dens)
+n_ddens <- nrow(slope) - n_dens
+brks <- unname(quantile(dens$area_pc, c(.25, .5, .75)))
+
+bin_lv <- c("1", "2", "3", "4")
+bin_nm <- c(
+  sprintf("1  most compact   \u2264 %.0f m\u00b2", brks[1]),
+  sprintf("2  %.0f\u2013%.0f m\u00b2", brks[1], brks[2]),
+  sprintf("3  %.0f\u2013%.0f m\u00b2", brks[2], brks[3]),
+  sprintf("4  most spread out   > %.0f m\u00b2", brks[3])
+)
+
+dumbbell <- dens |>
+  mutate(bin = cut(area_pc, c(-Inf, brks, Inf), labels = bin_lv)) |>
+  summarise(n = n(),
+            s90 = median(share_1990), s25 = median(share_2025),
+            q1_90 = quantile(share_1990, .25), q3_90 = quantile(share_1990, .75),
+            q1_25 = quantile(share_2025, .25), q3_25 = quantile(share_2025, .75),
+            up = sum(share_2025 > share_1990), down = sum(share_2025 < share_1990),
+            .by = bin) |>
+  mutate(lab   = bin_nm[as.integer(bin)],
+         y     = 5L - as.integer(bin),          # 规模档 1 在最上
+         rise  = s25 > s90,
+         h90   = if_else(s90 < s25,  1.35, -0.35),
+         h25   = if_else(s25 > s90, -0.35,  1.35)) |>
+  arrange(bin)
+stopifnot(nrow(dumbbell) == 4, sum(dumbbell$n) == n_dens)
+
+# ---- 官方三问的答案 ----
+pc_n <- city |> filter(!is.na(greenAreaPerCapitaM2)) |> count(year, name = "n_with_pc")
+leaders <- city |>
+  filter(!is.na(greenAreaPerCapitaM2)) |>
+  group_by(year) |>
+  slice_max(greenAreaPerCapitaM2, n = 1) |>
+  ungroup() |>
+  left_join(pc_n, by = "year") |>
+  arrange(year) |>
+  transmute(year, cityName, countryOrTerritoryName,
+            pc = greenAreaPerCapitaM2, share = averageShareOfGreenAreaInCityUrbanAreaPct,
+            n_with_pc)
+stopifnot(nrow(leaders) == length(yrs))
+
+region_tbl <- slope |>
+  summarise(n = n(), s90 = median(share_1990), s25 = median(share_2025),
+            up = sum(gain), .by = sdgRegion) |>
+  mutate(d = s25 - s90) |>
+  arrange(s90)
+n_reg <- nrow(region_tbl)
+ea_row <- region_tbl$d[region_tbl$sdgRegion == "Eastern Asia and South-eastern Asia"]
+eu_row <- region_tbl$d[region_tbl$sdgRegion == "Northern America and Europe"]
+
+r_sp90 <- cor(city$averageShareOfGreenAreaInCityUrbanAreaPct[city$year == y0],
+              city$greenAreaPerCapitaM2[city$year == y0], use = "complete.obs")
+r_sp25 <- cor(city$averageShareOfGreenAreaInCityUrbanAreaPct[city$year == y25],
+              city$greenAreaPerCapitaM2[city$year == y25], use = "complete.obs")
+
+n_reg_all  <- n_distinct(raw$sdgRegion)
+n_reg_city <- n_distinct(city$sdgRegion)
+n_foot     <- n_distinct(raw$footNote)
+n_dupname  <- sum(duplicated(unique(city[, c("cityCode", "cityName")])$cityName))
+n_us <- sum(city$countryOrTerritoryName == "United States of America") / length(yrs)
+n_in <- sum(city$countryOrTerritoryName == "India") / length(yrs)
+ga_1990    <- aggr$averageShareOfGreenAreaInCityUrbanAreaPct[aggr$year == y0 &
+                aggr$countryOrTerritoryName == "Global Average"]
+mean_1990  <- mean(city$averageShareOfGreenAreaInCityUrbanAreaPct[city$year == y0])
+```
+
+```{r}
+#| label: flow-line
+#| echo: false
+flow_cov  <- tt_flow(n_raw, n_panel,
+                     sprintf("%d 行是区域汇总（每年 8 行，不是城市）", n_aggr),
+                     sprintf("%d 座城市没有 2025 记录", n_rest))
+flow_band <- tt_flow(nrow(city), n_band_rows,
+                     sprintf("%d 行 2025 为空，画不出点", n_band_drop))
+flow_dens <- tt_flow(n_city, n_dens,
+                     sprintf("%d 座没有 2025 记录", n_rest),
+                     "Gomel 1990 年占比与人均同为 0，面积算不出来")
+```
+
+> `r flow_cov`
+
+**40 行不是城市。** 每年 8 行是区域汇总（`cityCode`、`cityName`、`sdgSubRegion` 三列全空），其中一行叫 `Global Average`；它的 1990 年值是 `r sprintf("%.4f", ga_1990)`，而 `r fmt_n(n_city)` 座城市当年的简单均值是 `r sprintf("%.4f", mean_1990)`——差 0.02 个百分点，可见汇总行就是城市行的简单平均。把它留在表里跑排序，`Global Average` 会挤进「绿地占比最高的城市」名单。
+
+```{r}
+#| label: fig-band
+#| echo: false
+#| fig-cap: "Two medians 4.2 points apart in 1990 and 2.1 points apart in 2020: the 145 cities that got a 2025 record were the barer half of the database from the start."
+#| fig-width: 9.4
+#| fig-height: 5.8
+p1 <- ggplot(band, aes(x = year, group = grp)) +
+  # 主序列的中间一半画成实心带；参照组不填色、只留虚线外框，否则实心带会把它的上下沿遮掉。
+  geom_ribbon(data = filter(band, grp == "panel"),
+              aes(ymin = p25, ymax = p75), fill = PAL$band, colour = NA) +
+  geom_ribbon(data = filter(band, grp == "rest"),
+              aes(ymin = p25, ymax = p75), fill = NA, colour = PAL$fade,
+              linetype = "22", linewidth = 0.45) +
+  geom_line(aes(y = med, colour = grp, linetype = grp), linewidth = 0.95) +
+  geom_point(aes(y = med, colour = grp), size = 2.0) +
+  annotate("rect", xmin = 2002.6, xmax = 2005.8, ymin = 21.8, ymax = 22.6,
+           fill = PAL$band, colour = PAL$ink, linewidth = 0.3) +
+  annotate("text", x = 2006.9, y = 22.2,
+           label = sprintf("%s cities with a 2025 record", fmt_n(n_panel)),
+           hjust = 0, vjust = 0.5, colour = PAL$ink, family = FAM,
+           size = mm(TT_TYPE[["annot"]])) +
+  annotate("rect", xmin = 2002.6, xmax = 2005.8, ymin = 20.4, ymax = 21.2,
+           fill = NA, colour = PAL$fade, linetype = "22", linewidth = 0.45) +
+  annotate("text", x = 2006.9, y = 20.8,
+           label = sprintf("%s cities whose record stops at 2020", fmt_n(n_rest)),
+           hjust = 0, vjust = 0.5, colour = PAL$body, family = FAM,
+           size = mm(TT_TYPE[["annot"]])) +
+  geom_text(data = ends, aes(x = yr + 0.45, y = med, label = sprintf("%.1f%%", med)),
+            colour = PAL$ink, hjust = 0, vjust = 0.4, family = FAM,
+            fontface = "bold", size = mm(TT_TYPE[["annot"]]), inherit.aes = FALSE) +
+  scale_colour_manual(values = c(panel = PAL$ink, rest = PAL$fade), guide = "none") +
+  scale_linetype_manual(values = c(panel = "solid", rest = "22"), guide = "none") +
+  scale_x_continuous(breaks = yrs, limits = c(1988, 2028), expand = c(0, 0)) +
+  scale_y_continuous(breaks = c(0, 5, 10, 15, 20), limits = c(0, 24.2), expand = c(0, 0)) +
+  labs(
+    title    = "The cities that got a 2025 record were the barer half all along",
+    subtitle = paste("Median share of green area and the middle half (P25\u2013P75),",
+                     "split by whether the city has a 2025 record"),
+    x = "year (five satellite snapshots)",
+    y = "green area as a share of the city area (%)",
+    caption  = tt_source("urban.csv", fmt_n(n_band_rows),
+      sprintf(paste0("city rows only; the %s aggregate rows are excluded. Share is the ",
+                     "satellite-derived average over each city polygon, so a move can mean ",
+                     "greening or a redrawn boundary. The %s cities with no 2025 value are ",
+                     "dropped from the 2025 point, never read as zero, so from 2020 onward ",
+                     "the two series describe different cities and their gap is a selection ",
+                     "difference rather than a change over time. The last median point of the ",
+                     "lower group is 2020, not 2025."),
+              fmt_n(n_aggr), fmt_n(n_rest)))
+  ) +
+  paper() +
+  theme(axis.title.x = element_text(margin = margin(t = 6)),
+        axis.title.y = element_text(margin = margin(r = 8)))
+p1
+```
+
+**读数**：两条中位线在靠近，但靠近的方式是**上面那条在掉**，不是下面那条追上来。`r fmt_n(n_rest)` 座没有 2025 记录的城市，中位占比从 1990 年的 `r sprintf("%.1f", med_r90)`% 一路降到 2020 年的 `r sprintf("%.1f", med_r20)`%。跌了 `r sprintf("%.1f", med_r90 - med_r20)` 个百分点。
+
+有 2025 记录的那 `r n_panel` 座正相反，起点只有 `r sprintf("%.1f", med_p90)`%。它先跌到 2000 年的 `r sprintf("%.1f", med_p00)`%，之后回到 `r sprintf("%.1f", med_p25)`%。
+
+也就是「被记了两次的那批」在 2000 年之后是**往上走**的，而只被记到 2020 年的那批一路向下。但这张图不能证明任何一方在变绿。
+
+能画到 2025 的这 `r n_panel` 座城市，1990 年的中位占比只有其余 `r fmt_n(n_rest)` 座的一半。`r sprintf("%.1f", med_p90)`% 对 `r sprintf("%.1f", med_r90)`%，**它们从一开始就是更秃的那一半**，两条线本来就不能互当对照。
+
+```{r}
+#| label: tbl-band
+#| echo: false
+band |>
+  mutate(组 = if_else(grp == "panel",
+                      sprintf("%d 座（两端都有记录）", n_panel),
+                      sprintf("%d 座（2025 无记录）", n_rest))) |>
+  transmute(组, 年份 = year, `城市数` = n,
+            `P25 %` = sprintf("%.2f", p25), `中位数 %` = sprintf("%.2f", med),
+            `P75 %` = sprintf("%.2f", p75)) |>
+  kable(format = "html",
+        caption = "图 1 的原始数字（同一份聚合；2025 行缺失 = 该组在 2025 年没有记录，不是 0）")
+```
+
+## 二、两端都有数的 145 座：占比在顶端被削平
+
+```{r}
+#| label: fig-slope
+#| echo: false
+#| fig-cap: "All eleven cities above 40% green in 1990 sit below 35% in 2025, while the median city moved the other way and gained 0.9 points."
+#| fig-width: 9.4
+#| fig-height: 6.6
+p2 <- ggplot(slope) +
+  geom_segment(data = filter(slope, !gain),
+               aes(x = 1, xend = 2, y = share_1990, yend = share_2025),
+               colour = PAL$loss, alpha = 0.40, linewidth = 0.30, lineend = "round") +
+  geom_segment(data = filter(slope, gain),
+               aes(x = 1, xend = 2, y = share_1990, yend = share_2025),
+               colour = PAL$ink, alpha = 0.40, linewidth = 0.30, lineend = "round") +
+  geom_segment(data = hi, aes(x = 1, xend = 2, y = share_1990, yend = share_2025,
+                              colour = hi_dir),
+               linewidth = 1.05, lineend = "round") +
+  geom_point(data = hi, aes(x = 1, y = share_1990, colour = hi_dir), size = 2.1) +
+  geom_point(data = hi, aes(x = 2, y = share_2025, colour = hi_dir), size = 2.1) +
+  geom_text(data = hi, aes(x = x_lab, y = share_1990, label = big_lab, colour = hi_dir),
+            hjust = 1, vjust = 0.5, family = FAM, size = mm(TT_TYPE[["annot"]]),
+            fontface = "bold", show.legend = FALSE) +
+  annotate("segment", x = 1, xend = 2.42, y = 40, yend = 40, colour = PAL$body,
+           linewidth = 0.42, linetype = "22") +
+  annotate("text", x = 2.42, y = 41.3, label = "40%", hjust = 1, vjust = 0,
+           colour = PAL$body, family = FAM, size = mm(TT_TYPE[["caption"]])) +
+  annotate("text", x = 2.42, y = 64,
+           label = sprintf("%d of these cities were above 40%% in 1990, %d in 2025",
+                           n_40_90, n_40_25),
+           hjust = 1, vjust = 0, colour = PAL$loss, family = FAM,
+           fontface = "bold", size = mm(TT_TYPE[["annot"]])) +
+  annotate("text", x = 2.42, y = 76,
+           label = sprintf("%d cities down  \u00b7  %d up", n_down, n_up),
+           hjust = 1, vjust = 0, colour = PAL$body, family = FAM,
+           size = mm(TT_TYPE[["annot"]])) +
+  scale_colour_manual(values = c(gain = PAL$ink, loss = PAL$loss), guide = "none") +
+  scale_x_continuous(breaks = c(1, 2), labels = c("1990", "2025"),
+                     limits = c(0.28, 2.42), expand = c(0, 0)) +
+  scale_y_continuous(breaks = c(0, 20, 40, 60), limits = c(-2.5, 78), expand = c(0, 0)) +
+  labs(
+    title    = "The top of the distribution was cut off, not greened over",
+    subtitle = sprintf(paste("Share of city area that is green in the %d cities with a",
+                             "record at both ends; one line per city, coloured by direction"),
+                       n_panel),
+    x = NULL, y = "green area as a share of the city area (%)",
+    caption  = tt_source("urban.csv", fmt_n(n_panel),
+      sprintf(paste0("slope lines carry direction only (deep green = the city gained ",
+                     "share, burnt amber = it lost share); the five labelled lines are the ",
+                     "three largest falls and the two largest rises, tagged with their 1990 ",
+                     "and 2025 values. Standard deviation falls from %.1f to %.1f points ",
+                     "while the median rises from %.2f%% to %.2f%%, which is what flattening ",
+                     "at the top looks like. Every value is a share of that city polygon, so ",
+                     "a boundary redrawn between snapshots moves a point with no vegetation ",
+                     "change behind it."),
+              sd_90, sd_25, med_s90, med_s25))
+  ) +
+  paper() +
+  theme(axis.text.x = element_text(colour = PAL$ink, face = "bold",
+                                   size = TT_TYPE[["axis_title"]]),
+        axis.title.y = element_text(margin = margin(r = 8)))
+p2
+```
+
+**读数**：`r n_down` 座跌、`r n_up` 座涨，而中位数是**涨的**。它从 `r sprintf("%.2f", med_s90)`% 升到 `r sprintf("%.2f", med_s25)`%，均值却反向。
+
+均值 `r sprintf("%.1f", mean_90)`% → `r sprintf("%.1f", mean_25)`%。标准差也从 `r sprintf("%.1f", sd_90)` 缩到 `r sprintf("%.1f", sd_25)`。最大值从 `r sprintf("%.1f", max_90)`% 掉到 `r sprintf("%.1f", max_25)`%。
+
+**掉的是顶端**：1990 年 40% 以上的 `r n_40_90` 座城市，到 2025 年一座不剩。起点与变化量的相关系数是 `r sprintf("%.2f", r_conv)`，起点越高跌得越多——这是均值回归的形态，不是「所有城市都在失去绿地」。
+
+跌得最狠的是 **Bissau**，`r sprintf("%.1f", hi$share_1990[hi$cityName == "Bissau"])`% → `r sprintf("%.1f", hi$share_2025[hi$cityName == "Bissau"])`%（`r sprintf("%+.1f", hi_delta[["Bissau"]])` 个百分点）。涨得最多的是 **León**（尼加拉瓜），`r sprintf("%.1f", hi$share_1990[hi$cityName == "León"])`% → `r sprintf("%.1f", hi$share_2025[hi$cityName == "León"])`%。
+
+**不能推的结论**：这是 `r n_panel` 座城市（`r n_ctry_panel` 个国家）的构成变化，不是全球城市的面貌变化。
+
+全库 `r fmt_n(n_city)` 座里 `r fmt_n(n_rest)` 座根本没有第二次观测。而这 `r n_panel` 座本身就是「更秃的一半」——把它们的变化当成世界趋势，会系统性高估绿地流失。
+
+```{r}
+#| label: tbl-slope
+#| echo: false
+bind_rows(
+  slope |> slice_min(delta, n = 3) |> mutate(方向 = "跌得最狠"),
+  slope |> slice_max(delta, n = 2) |> mutate(方向 = "涨得最多"),
+  top25  |> mutate(方向 = "2025 最高")
+) |>
+  transmute(方向, 城市 = cityName, 国家 = countryOrTerritoryName, 区域 = sdgRegion,
+            `1990 %` = sprintf("%.1f", share_1990),
+            `2025 %` = sprintf("%.1f", share_2025),
+            `变化 pp` = sprintf("%+.1f", delta)) |>
+  kable(format = "html",
+        caption = "图 2 的原始数字（同一批 145 座城市；末三行是 2025 年占比最高的三座，用来看顶端被削到什么程度）")
+```
+
+## 三、越挤的城市跌得越多，越铺开的反而涨
+
+```{r}
+#| label: fig-dumbbell
+#| echo: false
+#| fig-cap: "Cities packed into under 97 square metres of urban land per resident lost 4.2 points of green share; the most spread-out quartile gained 2.6."
+#| fig-width: 9.4
+#| fig-height: 5.0
+p3 <- ggplot(dumbbell) +
+  geom_segment(aes(x = s90, xend = s25, y = y, yend = y, colour = rise),
+               linewidth = 1.5, lineend = "round") +
+  geom_point(aes(x = s25, y = y, colour = rise), size = 3.4) +
+  # 中间两档的两个中位数几乎重合（7.03 对 6.84），1990 点画小一号叠在上面，
+  # 这样「几乎没动」是看得见的，而不是被盖成一个点。
+  geom_point(aes(x = s90, y = y), colour = PAL$fade, size = 2.1) +
+  geom_text(aes(x = s90, y = y, label = sprintf("%.1f", s90), hjust = h90),
+            colour = PAL$body, family = FAM, size = mm(TT_TYPE[["annot"]]),
+            vjust = -1.15) +
+  geom_text(aes(x = s25, y = y, label = sprintf("%.1f", s25), hjust = h25),
+            colour = PAL$ink, family = FAM, fontface = "bold",
+            size = mm(TT_TYPE[["annot"]]), vjust = -1.15) +
+  geom_text(aes(x = 0.35, y = y - 0.30,
+                label = sprintf("n = %d   \u00b7   %d up / %d down", n, up, down)),
+            colour = PAL$body, family = FAM, hjust = 0, vjust = 1,
+            size = mm(TT_TYPE[["caption"]])) +
+  annotate("point", x = 1.9, y = 4.92, colour = PAL$fade, size = 3.4) +
+  annotate("text", x = 2.7, y = 4.92, label = "1990", hjust = 0, vjust = 0.5,
+           colour = PAL$body, family = FAM, size = mm(TT_TYPE[["annot"]])) +
+  annotate("point", x = 6.4, y = 4.92, colour = PAL$ink, size = 3.4) +
+  annotate("text", x = 7.2, y = 4.92, label = "2025", hjust = 0, vjust = 0.5,
+           colour = PAL$body, family = FAM, size = mm(TT_TYPE[["annot"]])) +
+  scale_colour_manual(values = c(`FALSE` = PAL$loss, `TRUE` = PAL$ink), guide = "none") +
+  scale_x_continuous(breaks = c(0, 5, 10, 15, 20), limits = c(0, 23.5), expand = c(0, 0)) +
+  scale_y_continuous(breaks = dumbbell$y, labels = dumbbell$lab,
+                     limits = c(0.45, 5.15), expand = c(0, 0)) +
+  labs(
+    title    = "The tighter the city, the deeper the green share fell",
+    subtitle = sprintf(paste("Median share of green area by quartile of 1990 urban land",
+                             "per resident, the %d cities with both endpoints"),
+                       n_dens),
+    x = "green area as a share of the city area (%)", y = NULL,
+    caption  = tt_source("urban.csv", fmt_n(n_dens),
+      sprintf(paste0("urban land per resident is a derived column, 100 x green area per ",
+                     "capita / green share, i.e. square metres of city polygon behind each ",
+                     "resident; quartile cuts at %.0f, %.0f and %.0f m2. Dots are group ",
+                     "medians, so the bar length is the median move, not an individual ",
+                     "city. %d of the %d cities is missing: Gomel reports 0 for both fields ",
+                     "in 1990, so the ratio has no value. The grouping uses the 1990 ratio ",
+                     "only, which is fixed before the outcome and therefore not chosen to ",
+                     "fit it."),
+              brks[1], brks[2], brks[3], n_ddens, nrow(slope)))
+  ) +
+  paper() +
+  theme(axis.text.y  = element_text(colour = PAL$ink, size = TT_TYPE[["axis_text"]]),
+        axis.title.x = element_text(margin = margin(t = 6)),
+        plot.margin  = margin(16, 24, 12, 16))
+p3
+```
+
+**读数**：最紧凑的一档跌得最多，最铺开的一档反而涨。最紧凑的一档（每位居民背后的城市面积 ≤ `r sprintf("%.0f", brks[1])` m²）中位占比从 `r sprintf("%.2f", dumbbell$s90[1])`% 掉到 `r sprintf("%.2f", dumbbell$s25[1])`%。
+
+跌了 `r sprintf("%.1f", abs(dumbbell$s25[1] - dumbbell$s90[1]))` 个百分点。`r dumbbell$n[1]` 座里只有 `r dumbbell$up[1]` 座变绿。
+
+最铺开的一档（> `r sprintf("%.0f", brks[3])` m²）反过来：从 `r sprintf("%.2f", dumbbell$s90[4])`% 涨到 `r sprintf("%.2f", dumbbell$s25[4])`%。`r dumbbell$n[4]` 座里反过来有 `r dumbbell$up[4]` 座变绿。
+
+**中间两档几乎不动**：第二档 `r sprintf("%.2f", dumbbell$s90[2])`% → `r sprintf("%.2f", dumbbell$s25[2])`%。第三档 `r sprintf("%.2f", dumbbell$s90[3])`% → `r sprintf("%.2f", dumbbell$s25[3])`%。
+
+这是第二节「顶端被削平」的另一面。挤得紧的城市 1990 年绿地占比本来就高（第一档中位 `r sprintf("%.1f", dumbbell$s90[1])`%），起点高所以跌得多；铺开的城市起点低得多（`r sprintf("%.1f", dumbbell$s90[4])`%），涨一点就显得可观。
+
+每档只有 `r dumbbell$n[1]` 座，档内的中间一半跨度很宽：最紧凑档 1990 年从 `r sprintf("%.1f", dumbbell$q1_90[1])`% 到 `r sprintf("%.1f", dumbbell$q3_90[1])`%。所以这 4 组的中位数差异只能读成方向，不能读成效应大小。
+
+```{r}
+#| label: tbl-dumbbell
+#| echo: false
+dumbbell |>
+  transmute(规模档 = lab, `城市数` = n,
+            `1990 中位 %` = sprintf("%.2f", s90), `1990 P25` = sprintf("%.2f", q1_90),
+            `1990 P75` = sprintf("%.2f", q3_90),
+            `2025 中位 %` = sprintf("%.2f", s25), `2025 P25` = sprintf("%.2f", q1_25),
+            `2025 P75` = sprintf("%.2f", q3_25),
+            `变化 pp` = sprintf("%+.2f", s25 - s90),
+            `变绿 / 变秃` = sprintf("%d / %d", up, down)) |>
+  kable(format = "html",
+        caption = "图 3 的原始数字（面积档按 1990 年的派生列四分位切分；P25 / P75 只在本表出现，图上不画，避免压盖）")
+```
+
+## 四、官方三问的答案，以及它们各自的边界
+
+作者问了三件事。前两问在整张表上都有答案，但第三问「1990 年以来变化最大的城市」**只能在 `r n_panel` 座城市里回答**——其余 `r fmt_n(n_rest)` 座没有第二个观测点，它们既不算跌也不算涨。
+
+```{r}
+#| label: tbl-official
+#| echo: false
+leaders |>
+  transmute(年份 = year, 城市 = cityName, 国家 = countryOrTerritoryName,
+            `人均绿地 m2` = sprintf("%.1f", pc),
+            `绿地占比 %` = sprintf("%.1f", share),
+            `当年有该字段的城市数` = n_with_pc) |>
+  kable(format = "html",
+        caption = "问一：每一年人均绿地最多的城市（只在 city rows 内排序；2025 只有 144 座城市有该字段，那一行的「最多」只在 144 座内成立）")
+```
+
+人均绿地的榜首在 5 个年份里只换过 2 次：1990 年是刚果（金）的 Bunia，2000 / 2010 / 2020 三年都是埃及尼罗河三角洲的小城 Fāqūs，2025 年是印度的 Kozhikode。
+
+这类地方的共同点是城市面积极小、人口密度低，人均绿地于是被除法放大。`share` 与 `pc` 的相关系数 1990 年是 `r sprintf("%.2f", r_sp90)`、2025 年是 `r sprintf("%.2f", r_sp25)`，两者高度同步但不相等。
+
+**同一份数据里「占比」和「人均」会给出不同的榜首**，这不是矛盾，是两个分母：城市面积与人口。
+
+```{r}
+#| label: tbl-region
+#| echo: false
+region_tbl |>
+  transmute(区域 = sdgRegion, `城市数` = n,
+            `1990 中位 %` = sprintf("%.2f", s90),
+            `2025 中位 %` = sprintf("%.2f", s25),
+            `变化 pp` = sprintf("%+.2f", d),
+            `涨的城市数` = up) |>
+  kable(format = "html",
+        caption = "问二 / 问三：同一批 145 座城市按 UN SDG 区域的 1990→2025 中位占比（区域名取自城市行本身，不重编码、不合并新旧命名；n < 5 的行只作交代，不作结论）")
+```
+
+区域的跨度明显大于城市规模的跨度。**东亚与东南亚跌 `r sprintf("%.1f", abs(ea_row))` 个百分点**：`r region_tbl$n[region_tbl$sdgRegion == "Eastern Asia and South-eastern Asia"]` 座里仍有 `r region_tbl$up[region_tbl$sdgRegion == "Eastern Asia and South-eastern Asia"]` 座是涨的，这一格是被几座极端下跌拉下来的。
+
+北美与欧洲则涨 `r sprintf("%.1f", eu_row)` 个百分点。相比之下，图 3 的 4 个规模档只从 `r sprintf("%.1f", min(dumbbell$s25 - dumbbell$s90))` 到 `r sprintf("%.1f", max(dumbbell$s25 - dumbbell$s90))` 个百分点。
+
+`Australia and New Zealand` 只有 `r region_tbl$n[region_tbl$sdgRegion == "Australia and New Zealand"]` 座、`Oceania excluding Australia and New Zealand` 只有 `r region_tbl$n[region_tbl$sdgRegion == "Oceania excluding Australia and New Zealand"]` 座，这两行不能读成区域结论。
+
+## 数据异常（记录，不改数据）
+
+| 现象 | 原始数字 | 处理 |
+| --- | --- | --- |
+| 2025 年大面积空白 | 该年 `r fmt_n(n_panel)` / `r fmt_n(n_city)` 座城市有占比（`r sprintf("%.1f", 100 * n_panel / n_city)`%）；全表该年 `r fmt_n(n_na25_all)` / `r fmt_n(n_row25)` 行为空（含 8 行汇总） | 一律按「没记录」处理，不填 0、不插值；所有涉及 2025 的图只用这 `r n_panel` 座平衡面板，并在图注写明 |
+| 人均绿地比占比还少一格 | 2025 年 `greenAreaPerCapitaM2` 有 `r fmt_n(n_city - n_na25_pc)` 座城市有值，占比有 `r fmt_n(n_city - n_na25_share)` 座；差的这一座是 Mendoza（阿根廷），占比 6.08%、人均为空 | 该城在人均相关处单独缺席，不补 |
+| `share` 与 `pc` 同时为 0 的记录 | `r n_zero` 处（Gomel 1990、Suva 2000、Rivne 2000、Juiz De Fora 2000、Guixi 2000、Nairobi 2010、Messina 2010、Caracas 2020、Douai-Lens 2020），每一处都夹在前后非零的年份之间 | 记为「被记成 0」，不入图做趋势；Gomel 因 0/0 被排除在图 3 的规模分档外 |
+| 表里混着区域汇总行 | 每年 8 行、共 `r n_aggr` 行，`cityCode` / `cityName` / `sdgSubRegion` 全空；`Global Average` 1990 值为 `r sprintf("%.4f", ga_1990)`，城市行简单均值 `r sprintf("%.4f", mean_1990)` | 全库统一用 `!is.na(cityCode)` 分流，汇总行不参与任何城市级聚合与排序 |
+| 区域名两套并存 | 城市行 `r n_reg_city` 个区域名；汇总行另用 4 个旧名（`Central and Southern Asia`、`Eastern and South-eastern Asia`、`Global Average`、`Western Asia and Northern Africa`），全表共 `r n_reg_all` 个字符串 | 按字面分组会得到 `r n_reg_all` 个区域而不是 `r n_reg_city` 个；本页只对城市行分组，且不合并新旧名 |
+| 区域名里有不换行空格 | `Western Asia and Northern Africa` 存在一个用 U+00A0 的克隆，与普通空格版肉眼不可分（各 5 行，全部是汇总行） | 不做字符串归一、不合并——这是「按字面分组会多出区域」的直接来源 |
+| 城市名重复 | `r n_dupname` 个名字各对应两座城（Barcelona ES/VE、London CA/GB、Santiago CL/DO、Hamilton CA/NZ、Granada NI/ES、Toledo ES/US、Valencia ES/VE） | 一律按 `cityCode` 聚合与直标，不用 `cityName` 去重 |
+| `footNote` 三种版本，且预告了 2025 的覆盖 | `r n_foot` 种（153 / 915 / 921 字符）；921 字版写「population … 1990, 2000, 2010, 2020 and 2025」，915 字版只写到 2020 | 921 版覆盖的 144 座城全部有 2025 人均绿地；915 版 968 座里只有 Mendoza 有 2025 占比且无人均。这是「2025 谁被记」的唯一公开线索 |
+| 两个指标都是派生量 | `greenAreaPerCapitaM2` = 绿地面积 ÷ GHS-Pop 人口；城市边界由 Degree of Urbanization 生成，不等于行政边界 | 「人均」与「占比」两个榜首因此可以不同；边界若在两次快照之间重画，点会移动但没有植被变化 |
+| 自造列 | 图 3 的 `urban land per resident = 100 × pc_1990 ÷ share_1990` 不在原始数据里 | 只用 1990 年这一列做分组，`r n_ddens` 座城市（Gomel）因 0/0 被排除，图注写明 |
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/urban.csv`（`r fmt_n(n_raw)` × `r n_col`）；一城一年一行，`r fmt_n(n_city)` 座城市 × `r length(yrs)` 年 + `r n_aggr` 行区域汇总 |
+| 覆盖 | `r n_ctry` 个国家 / 地区；城市行 `r n_reg_city` 个 UN SDG 区域；年份固定 1990 / 2000 / 2010 / 2020 / 2025 |
+| 入图样本（图 1） | `r flow_band` |
+| 入图样本（图 2） | `r tt_flow(nrow(city), n_panel, sprintf("%d 座城市没有 2025 记录，两端无法成对", n_rest))` |
+| 入图样本（图 3） | `r flow_dens` |
+| 图 1 口径 | 城市行按「2025 是否有占比」分两组，各画中位数与 P25–P75；两组不是同一批城，2020 之后不可互当对照 |
+| 图 2 口径 | `r n_panel` 座平衡面板，同城 1990 与 2025 占比之差；颜色只表方向、不代表类别；标注的 5 座是最大 3 跌 + 最大 2 涨 |
+| 图 3 口径 | `r n_dens` 座；分组用 1990 年的派生面积列（固定在结果之前），组内比较 1990 与 2025 的中位数 |
+| 不作为证据的列 | `dataSource`（单值，无信息）；`footNote`（长文本，只用于解释 2025 的覆盖，不做分组）；`sdgSubRegion`（对汇总行为空，且与 `sdgRegion` 强嵌套，二选一即可） |
+| 不画的东西 | 不画全球时间趋势线把 1,112 座与 145 座混在一根线上（分母换人，趋势是伪的）；不按国家排名（美国 `r sprintf("%.0f", n_us)` 座、印度 `r sprintf("%.0f", n_in)` 座，中心定义差异会主导排名）；不用均值（顶端下跌会把均值拉走，与中位数反向）；不画 2025 的人均绿地分布（只有 144 座，且这 144 座是被 `footNote` 版本挑出来的，不是随机子集） |
+| 数字来源 | 正文所有数字来自本页 prep chunk 的同一份聚合；内联数字一律经 `sprintf` / `format` 定型，避开 knitr 对浮点数的默认格式化 |
+
+```{r}
+#| label: typography-audit
+#| include: false
+audit <- bind_rows(
+  tt_audit(p1) |> mutate(图 = "图 1", .before = 1),
+  tt_audit(p2) |> mutate(图 = "图 2", .before = 1),
+  tt_audit(p3) |> mutate(图 = "图 3", .before = 1)
+)
+n_size_used <- n_distinct(audit$size[!is.na(audit$size)])
+n_family    <- n_distinct(audit$family[!is.na(audit$family)])
+n_off       <- sum(!audit$in_ladder)
+stopifnot(n_size_used <= TT_TYPE_MAX, n_family <= TT_FAMILY_MAX, n_off == 0)
+cat(sprintf("typo-audit: sizes %d/%d, families %d/%d, off-ladder %d\n",
+            n_size_used, TT_TYPE_MAX, n_family, TT_FAMILY_MAX, n_off), file = stderr())
+```
