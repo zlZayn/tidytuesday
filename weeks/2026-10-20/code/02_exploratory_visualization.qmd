@@ -1,0 +1,860 @@
+---
+title: "起薪与 AI 暴露度：一个被拆开后消失的零"
+subtitle: "TidyTuesday · 2026-10-20 (Week 42)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(ggplot2)
+  library(ggrepel)
+  library(knitr)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+# ---- 本周色彩（只在本周生效；共享 theme 不含任何色值）----
+# 五个色值，语义固定，跨图不换位：
+#   bg   —— 中灰纸面，同时充当面板内的网格色（不引第六个值）
+#   card —— 白卡面，panel 底色
+#   ink  —— 深蓝黑，标题 / 数据点 / 轴文字 / 栏线
+#   body —— 铁灰蓝，副标题 / 脚注 / 轴标题
+#   gold —— 金，唯一强调色：AIOE 零线、被点名的专业、组内引导线、图内读数
+PAL <- list(
+  bg   = "#ECEDEE",
+  card = "#FFFFFF",
+  ink  = "#14213D",
+  body = "#5C6479",
+  gold = "#8C6B21"
+)
+
+# ---- 本周字体决策：两族，按角色分工（标题族 + 数据族）----
+# 报纸的编辑声部用衬线（Georgia），数据声部用无衬线（Segoe UI）。
+# 家族数 2 = TT_FAMILY_MAX。首屏 KPI 数字走页面自身字体栈，不参与图内决策。
+FAM_T <- "Georgia"
+FAM_D <- TT_FAMILY[["text"]]
+mm <- function(pt) pt / .pt          # element_text 用 pt，geom_text 用 mm
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi,
+                      dev.args = list(bg = PAL$bg))
+
+# 本周主题：一处收口，四张图共用（栏线、衬线标题、无网格、无图例）
+news <- function() {
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$bg, family = FAM_D) +
+    theme(
+      panel.background = element_rect(fill = PAL$card, colour = NA),
+      panel.grid       = element_blank(),
+      panel.border     = element_rect(colour = PAL$ink, fill = NA, linewidth = 0.32),
+      plot.title       = element_text(family = FAM_T, face = "bold", colour = PAL$ink,
+                                      size = TT_TYPE[["title"]], hjust = 0,
+                                      margin = margin(b = 3)),
+      plot.subtitle    = element_text(family = FAM_T, colour = PAL$body,
+                                      size = TT_TYPE[["subtitle"]], hjust = 0,
+                                      margin = margin(b = 11), lineheight = 1.22),
+      plot.caption     = element_text(family = FAM_D, colour = PAL$body,
+                                      size = TT_TYPE[["caption"]], hjust = 0,
+                                      margin = margin(t = 11), lineheight = 1.4),
+      axis.text        = element_text(family = FAM_D, colour = PAL$ink,
+                                      size = TT_TYPE[["axis_text"]]),
+      axis.title       = element_text(family = FAM_D, colour = PAL$body,
+                                      size = TT_TYPE[["axis_title"]]),
+      strip.text       = element_text(family = FAM_D, colour = PAL$ink, face = "bold",
+                                      size = TT_TYPE[["axis_title"]], hjust = 0),
+      legend.position  = "none",
+      plot.margin      = margin(16, 20, 12, 16)
+    )
+}
+
+# 散点类共用的坐标上下限，凡用到的图都取同一组，面板之间可横向对比
+XLIM <- c(9000, 130000)
+YLIM <- c(-1.45, 1.62)
+XBRK <- c(15000, 25000, 40000, 60000, 100000)
+XLAB <- c("$15k", "$25k", "$40k", "$60k", "$100k")
+
+raw  <- read_csv("../data/ai_salary_majors.csv", show_col_types = FALSE)
+occs <- read_csv("../data/major_occupations.csv", show_col_types = FALSE)
+```
+
+```{r}
+#| label: metrics
+#| echo: false
+# 全页共用的标量：先算一次，正文与四张图都引用同一份
+n_majors <- nrow(raw)
+stopifnot(n_distinct(raw$cip4) == n_majors)              # 一行一个专业
+
+cor_ci <- function(x, y) {
+  r  <- cor(x, y)
+  z  <- atanh(r)
+  se <- 1 / sqrt(sum(!is.na(x) & !is.na(y)) - 3)
+  c(r = r, lo = tanh(z - 1.96 * se), hi = tanh(z + 1.96 * se))
+}
+ci_all  <- cor_ci(raw$median_starting_salary, raw$ai_exposure)
+ci_lang <- cor_ci(raw$median_starting_salary, raw$ai_exposure_language)
+ci_img  <- cor_ci(raw$median_starting_salary, raw$ai_exposure_image)
+r_all  <- ci_all[["r"]]
+r_lang <- ci_lang[["r"]]
+r_img  <- ci_img[["r"]]
+r_lang_tot <- cor(raw$ai_exposure, raw$ai_exposure_language)
+r_img_tot  <- cor(raw$ai_exposure, raw$ai_exposure_image)
+r_lang_img <- cor(raw$ai_exposure_language, raw$ai_exposure_image)
+rho_all <- cor(raw$median_starting_salary, raw$ai_exposure, method = "spearman")
+r_log   <- cor(log10(raw$median_starting_salary), raw$ai_exposure)
+
+med_pay  <- median(raw$median_starting_salary)
+med_exp  <- median(raw$ai_exposure)
+n_below0 <- sum(raw$ai_exposure < 0)
+pct_below0 <- 100 * n_below0 / n_majors
+stopifnot(abs(mean(raw$ai_exposure)) > 0.5)   # 专业层面并不以 0 为中心
+```
+
+# 一个被拆开后消失的零
+
+<div style="display:flex;flex-wrap:wrap;gap:0;margin:20px 0 6px;border-top:2px solid #14213D;border-bottom:1px solid #14213D">
+<div style="flex:1 1 30%;min-width:200px;padding:12px 18px 10px 0;border-right:1px solid #ECEDEE">
+<div style="font-size:27px;font-weight:700;color:#14213D;line-height:1.05">≈ 0</div>
+<div style="font-size:12px;color:#5C6479;margin-top:5px;line-height:1.5">285 个专业的起薪 × 总 AI 暴露度<br>Pearson r = 0.0045（95% CI −0.11 ~ 0.12）</div>
+</div>
+<div style="flex:1 1 30%;min-width:200px;padding:12px 18px 10px;border-right:1px solid #ECEDEE">
+<div style="font-size:27px;font-weight:700;color:#8C6B21;line-height:1.05">−0.16</div>
+<div style="font-size:12px;color:#5C6479;margin-top:5px;line-height:1.5">语言任务暴露 × 起薪<br>95% CI 不含 0（−0.27 ~ −0.04）</div>
+</div>
+<div style="flex:1 1 30%;min-width:200px;padding:12px 0 10px 18px">
+<div style="font-size:27px;font-weight:700;color:#8C6B21;line-height:1.05">+0.33</div>
+<div style="font-size:12px;color:#5C6479;margin-top:5px;line-height:1.5">图像任务暴露 × 起薪<br>95% CI 不含 0（+0.22 ~ +0.43）</div>
+</div>
+</div>
+
+官方说明写这两个变量「几乎不相关（r 约为 0.01）」。我自己复算是 `r sprintf("%.4f", r_all)`，那句话没错：这个零不是「没有关系」，是两股方向相反的关系抵消出来的。
+
+把 AIOE 拆成语言任务与图像任务两支，一支向下（`r sprintf("%.3f", r_lang)`）、一支向上（`r sprintf("%.3f", r_img)`），两个置信区间都不含 0。
+
+所以本周的主线不是「AI 暴露与薪资无关」，而是**「AI 暴露」这个大词把两件事压在了一起**，而这两件事在薪资上指向相反的方向。再往下一层，那个正号也大半来自「工科整体又高又贵」的组间差别，而不是同专业内部的关系。
+
+## 一、先讲口径：285 个专业是怎么来的
+
+```{r}
+#| label: scope
+#| echo: false
+n_occ_pairs <- nrow(occs)
+n_soc <- n_distinct(occs$soc)
+stopifnot(n_distinct(occs$cip4) == n_majors)              # 职业表覆盖同一批专业
+stopifnot(!any(duplicated(occs[, c("cip4", "soc")])))
+
+n_inst        <- raw$n_institutions
+n_single_inst <- sum(n_inst == 1)
+n_le10_inst   <- sum(n_inst <= 10)
+med_inst      <- median(n_inst)
+
+src_tbl <- tribble(
+  ~来源, ~在本页用到的列, ~口径,
+  "College Scorecard（美国教育部，field-of-study 文件）", "median_starting_salary", "学士学位毕业一年后的收入中位数；院校级值再按 4 位 CIP 取中位数，不按毕业生人数加权",
+  "AIOE（Felten, Raj & Seamans 2021）", "ai_exposure, ai_exposure_language, ai_exposure_image", "职业（SOC）层面的标准化分数，均值 0、标准差 1；一个专业取其全部去向职业的算术平均",
+  "NCES/BLS CIP2020 → SOC2018 crosswalk", "cip4, soc（在 major_occupations.csv 里）", "把专业连到毕业生的常见职业；一个专业连 1 ~ 36 个职业"
+)
+```
+
+`r n_majors` 个专业不是「所有专业」，而是**「起薪与 AIOE 两头都有值」的交集**：Scorecard 里有毕业一年后收入的 4 位 CIP，乘上 crosswalk 能连到至少一个带 AIOE 分数的职业，剩下的就是这 `r n_majors` 个。
+
+底层是 `r format(n_occ_pairs, big.mark = ",")` 条专业 × 职业连线，覆盖 `r n_soc` 个不同职业——下面所有暴露度数字都从这张表算出来。
+
+四个必须先交代的口径：
+
+1. **起薪不是「应届起薪」**，是毕业**一年后**的收入中位数；而且是院校级中位数的中位数。只有 `r n_single_inst` 个专业只来自 1 所院校、`r n_le10_inst` 个不超过 10 所（中位 `r med_inst` 所），所以起薪的差距里混着「哪些院校开设这个专业」。
+2. **AIOE 的 0 是「平均职业」，不是「平均专业」**。专业层面只有 `r n_below0` 个（`r sprintf("%.1f", pct_below0)`%）落在 0 以下，专业中位数是 `r sprintf("%.3f", med_exp)`——crosswalk 连的都是专业技术岗，本来就比全职业平均更暴露。**所以原分数的正负不要当「安全 / 危险」的分界，要读 `ai_exposure_percentile`。**
+3. **暴露度 ≠ 会被取代**。AIOE 量的是「这个职业需要的能力与 AI 能做的事重叠多少」，重叠可以是替代也可以是辅助；它不含岗位数量、工资弹性或时间表。
+4. **`ai_exposure` 几乎就是语言那一支**：它与 `ai_exposure_language` 的相关是 `r sprintf("%.3f", r_lang_tot)`，与 `ai_exposure_image` 只有 `r sprintf("%.3f", r_img_tot)`。这正是第三节要拆的理由。
+
+```{r}
+#| label: tbl-source
+#| echo: false
+src_tbl |> kable(format = "html",
+  caption = "三个数据来源与各自的口径（本周只用这两份 CSV 的 13 + 7 列，不回溯原始 xlsx）")
+```
+
+## 二、总暴露度与起薪：一条真正平的线
+
+```{r}
+#| label: prep-quadrant
+#| echo: false
+# 四象限：竖分割在中位起薪，横分割在 AIOE 的原点 0（两者基准不同，见脚注）
+quad <- raw |>
+  mutate(q = case_when(
+    median_starting_salary >= med_pay & ai_exposure >= 0 ~ "HI pay · above-avg exposure",
+    median_starting_salary >= med_pay & ai_exposure <  0 ~ "HI pay · below-avg exposure",
+    median_starting_salary <  med_pay & ai_exposure >= 0 ~ "LO pay · above-avg exposure",
+    TRUE                                                 ~ "LO pay · below-avg exposure"
+  ))
+qt <- quad |>
+  summarise(n = n(), mp = median(median_starting_salary), me = median(ai_exposure),
+            .by = q) |>
+  arrange(desc(n))
+stopifnot(sum(qt$n) == n_majors, nrow(qt) == 4)
+
+# 换成「专业中位暴露度」做横线的另一种切法，用来证明象限数是切法敏感的
+alt_hh <- sum(raw$median_starting_salary >= med_pay & raw$ai_exposure >= med_exp)
+alt_hl <- sum(raw$median_starting_salary >= med_pay & raw$ai_exposure <  med_exp)
+alt_lh <- sum(raw$median_starting_salary <  med_pay & raw$ai_exposure >= med_exp)
+alt_ll <- sum(raw$median_starting_salary <  med_pay & raw$ai_exposure <  med_exp)
+stopifnot(alt_hh + alt_hl + alt_lh + alt_ll == n_majors)
+alt_qt <- tibble::tribble(
+  ~q_alt,                            ~n,
+  "HI pay · above median exposure",  alt_hh,
+  "HI pay · below median exposure",  alt_hl,
+  "LO pay · above median exposure",  alt_lh,
+  "LO pay · below median exposure",  alt_ll
+) |>
+  mutate(share = 100 * n / n_majors) |>
+  arrange(desc(n))
+
+# 图 1 点名的 9 个专业：两端各取几个 + 官方点到的两个
+lab_cip <- c("1514", "5138", "1107", "2705", "3801", "3020", "5005", "5003", "5139")
+lab_short <- c(
+  "1514" = "Nuclear eng. tech.\n(1 institution)",
+  "5138" = "Registered nursing",
+  "1107" = "Computer science",
+  "2705" = "Statistics",
+  "3801" = "Philosophy",
+  "3020" = "International studies",
+  "5005" = "Drama & theatre",
+  "5003" = "Dance",
+  "5139" = "Practical nursing"
+)
+lab_df <- raw |> filter(cip4 %in% lab_cip) |> mutate(lab = unname(lab_short[cip4]))
+stopifnot(nrow(lab_df) == length(lab_cip))
+
+# 四象限的角标读数（位置取面板四角，均落在空白处）
+qtag <- tribble(
+  ~x,      ~y,     ~hj, ~vj, ~q,
+  10300,    1.56,  0,   1,   "LO pay · above-avg exposure",
+  119000,   1.56,  1,   1,   "HI pay · above-avg exposure",
+  10300,   -1.40,  0,   0,   "LO pay · below-avg exposure",
+  119000,  -1.40,  1,   0,   "HI pay · below-avg exposure"
+) |>
+  left_join(qt, by = "q") |>
+  mutate(lab = sprintf("%s\nn = %d", q, n))
+stopifnot(!anyNA(qtag$n))
+```
+
+```{r}
+#| label: fig-quadrant
+#| echo: false
+#| fig-cap: "Starting pay and overall AI exposure are unrelated across 285 majors; the gold points are the nine majors named in the text and the quadrant counts are printed in each corner."
+#| fig-width: 9.4
+#| fig-height: 6.0
+fig1 <- ggplot(raw, aes(x = median_starting_salary, y = ai_exposure)) +
+  geom_hline(yintercept = 0, colour = PAL$gold, linewidth = 0.7) +
+  geom_vline(xintercept = med_pay, colour = PAL$ink, linewidth = 0.3, linetype = "22") +
+  geom_point(colour = PAL$ink, size = 1.35, alpha = 0.55, stroke = 0) +
+  geom_point(data = lab_df, colour = PAL$gold, size = 2.5, stroke = 0) +
+  geom_label_repel(data = lab_df, aes(label = lab), family = FAM_D,
+                   colour = PAL$ink, size = mm(TT_TYPE[["annot"]]),
+                   fill = PAL$card, label.size = 0, label.padding = unit(1.5, "pt"),
+                   lineheight = 0.95, box.padding = 0.42, point.padding = 0.22,
+                   min.segment.length = 0, segment.colour = PAL$body,
+                   segment.size = 0.22, max.overlaps = 40, seed = 20261020) +
+  geom_text(data = qtag, aes(x = x, y = y, label = lab, hjust = hj, vjust = vj),
+            family = FAM_D, colour = PAL$body, size = mm(TT_TYPE[["annot"]]),
+            lineheight = 1.25) +
+  scale_x_log10(limits = XLIM, breaks = XBRK, labels = XLAB,
+                expand = expansion(mult = c(0, 0))) +
+  scale_y_continuous(limits = YLIM, breaks = seq(-1, 1.5, 0.5),
+                     expand = expansion(mult = c(0, 0))) +
+  labs(
+    title    = "Pay and AI exposure simply do not move together",
+    subtitle = paste0("Median earnings one year after graduation against the average AIOE of each ",
+                      "major's occupations"),
+    x = "median earnings one year after graduation (log scale)",
+    y = "average AIOE exposure of the major's occupations",
+    caption  = tt_source("ai_salary_majors.csv", n_majors,
+      sprintf(paste0("Pearson r = %.4f (95%% CI %.3f to %.3f), Spearman %.3f, and %.3f on the log ",
+                     "of pay, so the flatness is not a scale artefact. The gold rule is AIOE = 0, ",
+                     "the average occupation; only %d of %d majors sit below it. The dashed rule is ",
+                     "the median major's pay ($%s), so the two dividers use different baselines: the ",
+                     "exposure axis is split at the index origin, the pay axis at the median. AIOE ",
+                     "measures overlap with what AI can do, not the probability of replacement."),
+              r_all, ci_all[["lo"]], ci_all[["hi"]], rho_all, r_log,
+              n_below0, n_majors, format(med_pay, big.mark = ",")))
+  ) +
+  news()
+fig1
+```
+
+**读数**：整条相关是 `r sprintf("%.4f", r_all)`，95% 置信区间 `r sprintf("%.3f", ci_all[["lo"]])` ~ `r sprintf("%.3f", ci_all[["hi"]])`——宽得足以装下「中等负相关」到「中等正相关」，也就是说**这份数据排除不了任何温和的关系，只能排除强关系**。换成 Spearman（`r sprintf("%.3f", rho_all)`）、换成 log 起薪（`r sprintf("%.3f", r_log)`）都还是零，这个零不是尺度造成的。
+
+四象限几乎均分：人最多的一格 `r max(qt$n)` 个（低薪 × 高暴露），最少的一格 `r min(qt$n)` 个（低薪 × 低暴露），四个角上已印着各自的数量。
+
+**横竖两条线的基准不一样**：竖线是中位起薪 $`r format(med_pay, big.mark = ",")`，横线却是 AIOE 的原点 0，也就是「平均职业」，不是专业的中位数。这不是疏漏，是两把尺子各自的原点。
+
+把横线挪到专业中位暴露度 `r sprintf("%.3f", med_exp)` 再切一次，四象限仍然均分（见下表）。两种切法都不给结论，这正是「无关系」的样子。
+
+图里还有两处该记住的。左上角孤零零的 `Nuclear eng. tech.` 暴露度百分位只有 `r sprintf("%.1f", lab_df$ai_exposure_percentile[lab_df$cip4 == "1514"])`，起薪却是 $`r format(lab_df$median_starting_salary[lab_df$cip4 == "1514"], big.mark = ",")`。
+
+右下角的 `Registered nursing` 百分位 `r sprintf("%.1f", lab_df$ai_exposure_percentile[lab_df$cip4 == "5138"])`、起薪 $`r format(lab_df$median_starting_salary[lab_df$cip4 == "5138"], big.mark = ",")`，与它落在同一档。
+
+但前者**只来自 `r raw$n_institutions[raw$cip4 == "1514"]` 所院校**，后者背后有 `r format(raw$n_institutions[raw$cip4 == "5138"], big.mark = ",")` 所院校、`r format(raw$n_graduates[raw$cip4 == "5138"], big.mark = ",")` 个毕业生。**同一档「低暴露、高薪」，证据强度完全不同**，读图时不该同等对待。
+
+```{r}
+#| label: tbl-quadrant
+#| echo: false
+qt |>
+  transmute(`象限（竖线 = 中位起薪，横线 = AIOE 0）` = q, `专业数` = n,
+            `占比` = sprintf("%.1f%%", 100 * n / n_majors),
+            `象限内中位起薪` = format(mp, big.mark = ","),
+            `象限内中位暴露度` = sprintf("%.3f", me)) |>
+  kable(format = "html",
+        caption = "四象限的原始数字，对应图 1（同一份 285 行的聚合；象限边界混用两种基准，见正文）")
+```
+
+```{r}
+#| label: tbl-quadrant-alt
+#| echo: false
+alt_qt |>
+  transmute(`象限（竖线 = 中位起薪，横线 = 专业中位暴露度）` = q_alt, `专业数` = n,
+            `占比` = sprintf("%.1f%%", share)) |>
+  kable(format = "html",
+        caption = sprintf(paste0("换一种切法：横线从 AIOE 0 挪到专业中位暴露度 %.3f，",
+                                 "四象限仍然均分（与上表同一批 285 个专业）"), med_exp))
+```
+
+## 三、拆开「AI 暴露」，两条反向的线
+
+```{r}
+#| label: prep-tercile
+#| echo: false
+# 每个任务维度各自三等分：只保留上三分之一与下三分之一，中间三分之一不入图。
+# 用秩均分（ntile）而不是 quantile 阈值：分位点上存在并列（语言维度第 2/3 分位上有
+# tie_lang 个专业同分，图像维度 tie_img 个），按阈值切会切出 97/95/93 这种不等量，
+# 也会让两个面板的对比基准不一致。并列按行序归入，计数写进图 2 脚注。
+tier_of <- function(x) {
+  k <- ntile(x, 3)
+  ifelse(k == 1L, "bottom third", ifelse(k == 3L, "top third", NA_character_))
+}
+tk <- raw |>
+  transmute(cip4, pay = median_starting_salary,
+            lang_tier = tier_of(ai_exposure_language),
+            img_tier  = tier_of(ai_exposure_image))
+n_tier <- sum(!is.na(tk$lang_tier))
+stopifnot(n_tier == sum(!is.na(tk$img_tier)), n_tier == 190)
+cut_lang <- quantile(raw$ai_exposure_language, 2 / 3)
+cut_img  <- quantile(raw$ai_exposure_image,  2 / 3)
+tie_lang <- sum(raw$ai_exposure_language == cut_lang)
+tie_img  <- sum(raw$ai_exposure_image == cut_img)
+
+band <- bind_rows(
+  tk |> filter(!is.na(lang_tier)) |>
+    transmute(task = "Language-task exposure", tier = lang_tier, pay),
+  tk |> filter(!is.na(img_tier)) |>
+    transmute(task = "Image-generation exposure", tier = img_tier, pay)
+) |>
+  mutate(task = factor(task, levels = c("Language-task exposure", "Image-generation exposure")),
+         tier = factor(tier, levels = c("bottom third", "top third")))
+
+# 密度在 log10(起薪) 上算，再变换回美元坐标——直接对美元算密度会把形状拉歪
+dens <- band |>
+  group_by(task, tier) |>
+  reframe({
+    de <- density(log10(pay), adjust = 0.85, n = 512)
+    tibble(pay = 10^de$x, d = de$y)
+  }) |>
+  ungroup()
+
+terc <- band |>
+  summarise(n = n(), p25 = quantile(pay, .25), p50 = median(pay),
+            p75 = quantile(pay, .75), mean_log = mean(log10(pay)),
+            .by = c(task, tier)) |>
+  arrange(task, tier)
+stopifnot(nrow(terc) == 4, all(terc$n == 95))
+
+pick_med <- function(t, tt) terc$p50[terc$task == t & terc$tier == tt]
+pick_gm  <- function(t, tt) terc$mean_log[terc$task == t & terc$tier == tt]
+lang_lo <- pick_med("Language-task exposure", "bottom third")
+lang_hi <- pick_med("Language-task exposure", "top third")
+img_lo  <- pick_med("Image-generation exposure", "bottom third")
+img_hi  <- pick_med("Image-generation exposure", "top third")
+lang_gap <- lang_hi - lang_lo
+img_gap  <- img_hi - img_lo
+img_ratio <- img_hi / img_lo
+lang_log_ratio <- 10^(pick_gm("Language-task exposure", "top third") -
+                      pick_gm("Language-task exposure", "bottom third"))
+img_log_ratio  <- 10^(pick_gm("Image-generation exposure", "top third") -
+                      pick_gm("Image-generation exposure", "bottom third"))
+
+# 图内读数块：钉在每个面板右上角（那里密度已归零），不占曲线
+ymax_d <- dens |> summarise(ymax = max(d) * 1.06, .by = task)
+readout <- terc |>
+  summarise(top = p50[tier == "top third"], bot = p50[tier == "bottom third"],
+            .by = task) |>
+  left_join(ymax_d, by = "task") |>
+  mutate(gap = top - bot,
+         gap_txt = if_else(gap < 0,
+                           sprintf("gap  \u2212$%.1fk", abs(gap) / 1000),
+                           sprintf("gap  +$%.1fk", gap / 1000))) |>
+  reframe(x = 11200,
+          y = ymax * c(0.99, 0.90, 0.81),
+          lab = c(sprintf("top third   $%.1fk", top / 1000),
+                  sprintf("bottom third   $%.1fk", bot / 1000),
+                  gap_txt),
+          .by = task)
+
+# 表 3 末列：同一维度内上三分位相对下三分位的几何均值倍数
+terc <- terc |>
+  mutate(geom_ratio = if_else(tier != "top third", NA_character_,
+           if_else(task == "Language-task exposure",
+                   sprintf("%.3f", lang_log_ratio),
+                   sprintf("%.3f", img_log_ratio))))
+```
+
+```{r}
+#| label: fig-tercile
+#| echo: false
+#| fig-cap: "Language-task exposure and image-generation exposure pull starting pay in opposite directions: the top third by language exposure earns less than the bottom third, while the top third by image exposure earns about 1.7 times as much."
+#| fig-width: 9.4
+#| fig-height: 5.0
+med_marks <- terc |>
+  left_join(ymax_d, by = "task") |>
+  mutate(col = if_else(tier == "top third", PAL$gold, PAL$ink))
+
+fig2 <- ggplot(dens, aes(x = pay, y = d)) +
+  geom_line(aes(colour = tier), linewidth = 0.9) +
+  geom_segment(data = med_marks,
+               aes(x = p50, xend = p50, y = 0, yend = ymax * 0.86, colour = tier),
+               inherit.aes = FALSE, linewidth = 0.32, linetype = "22") +
+  geom_text(data = readout, aes(x = x, y = y, label = lab), inherit.aes = FALSE,
+            family = FAM_D, colour = PAL$ink, size = mm(TT_TYPE[["annot"]]),
+            hjust = 0, vjust = 1, lineheight = 1.4) +
+  facet_wrap(~ task, nrow = 1) +
+  scale_colour_manual(values = c("bottom third" = PAL$ink, "top third" = PAL$gold)) +
+  scale_x_log10(limits = XLIM, breaks = XBRK, labels = XLAB,
+                expand = expansion(mult = c(0, 0))) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.04))) +
+  labs(
+    title    = "Split the index in two and it stops being a flat line",
+    subtitle = paste0("Distribution of starting pay in the bottom versus the top third of each task ",
+                      "dimension\n", "(middle third withheld); the dashed rule is that third's median"),
+    x = "median earnings one year after graduation (log scale)",
+    y = "density per log10 dollar unit",
+    caption  = tt_source("ai_salary_majors.csv", NULL,
+      sprintf(paste0("n = 190 majors per panel (95 per curve; the middle third of each dimension is ",
+                     "withheld, so the two panels are the same 285 majors cut two different ways). ",
+                     "Thirds are cut by rank, so boundary ties (%d majors share the language cut, ",
+                     "%d the image cut) fall to the side their row order puts them. ",
+                     "Language: top-third median $%.1fk against bottom-third $%.1fk, which is %.1f%% ",
+                     "lower in level and %.3f in geometric mean. Image: $%.1fk against $%.1fk, or ",
+                     "x%.2f and %.3f in geometric mean. Pearson r on pay is %.3f for language ",
+                     "(95%% CI %.3f to %.3f) and %.3f for image (%.3f to %.3f): one interval sits ",
+                     "entirely below zero, the other entirely above."),
+              tie_lang, tie_img,
+              lang_hi / 1000, lang_lo / 1000, 100 * lang_gap / lang_lo, lang_log_ratio,
+              img_hi / 1000, img_lo / 1000, img_ratio, img_log_ratio,
+              r_lang, ci_lang[["lo"]], ci_lang[["hi"]],
+              r_img, ci_img[["lo"]], ci_img[["hi"]]))
+  ) +
+  news() +
+  theme(panel.spacing = unit(20, "pt"))
+fig2
+```
+
+```{r}
+#| label: flow-tercile
+#| echo: false
+flow_terc <- tt_flow(n_majors, 190, "两个维度各弃掉中间三分之一，各 95 个专业")
+```
+
+> `r flow_terc`
+
+**读数**：语言暴露这一支是反的。上三分位的中位起薪 $`r sprintf("%.1f", lang_hi / 1000)`k，比下三分位的 $`r sprintf("%.1f", lang_lo / 1000)`k 少 `r format(abs(round(lang_gap)), big.mark = ",")`。**暴露更高的人反而赚得少。**
+
+图像暴露则相反：$`r sprintf("%.1f", img_hi / 1000)`k 对 $`r sprintf("%.1f", img_lo / 1000)`k，`r sprintf("%.2f", img_ratio)` 倍。换成几何均值口径，方向一致（`r sprintf("%.3f", lang_log_ratio)` 与 `r sprintf("%.3f", img_log_ratio)`）。
+
+**两个维度不是同一个东西的两个刻度，而是两个方向相反的信号**——这就是把它们平均成一个 `ai_exposure` 之后相关归零的直接原因。
+
+但这张图**不能**用来证明「图像任务暴露越高越挣得多」。它只把 285 个专业整体切三份，切出来的差别里有很大一块是组间差别：图像暴露高的专业集中在工科与建筑，而这些专业本来就薪高。下一节用组内相关直接检验。语言那一支虽不含 0，效应量只有 `r sprintf("%.3f", r_lang)`，属于「稳定但微弱」，不要读成「读语言类专业就完了」。
+
+```{r}
+#| label: tbl-tercile
+#| echo: false
+terc |>
+  transmute(`任务维度` = as.character(task), `三分位` = as.character(tier), n,
+            `P25` = format(round(p25), big.mark = ","),
+            `中位数` = format(round(p50), big.mark = ","),
+            `P75` = format(round(p75), big.mark = ","),
+            `几何均值倍数（上÷下）` = if_else(is.na(geom_ratio), "", geom_ratio)) |>
+  kable(format = "html",
+        caption = "两个任务维度的分位数字，对应图 2（美元；末列只有上三分位那一行有值，是相对同维度下三分位的几何均值倍数）")
+```
+
+## 四、那个「0」是四个组互相抵消出来的
+
+```{r}
+#| label: prep-group
+#| echo: false
+# 分组：把 37 个 broad_field_short 收成 4 组（分面吃不下 37 级）。
+# 分组只为读图，不是官方分类，规则即下面这张表，明细见「方法与口径」。
+grp_of <- function(x) {
+  case_when(
+    x %in% c("Engineering", "Engineering Tech", "Computer Science",
+             "Physical Sciences", "Mathematics & Statistics", "Science Tech") ~
+      "Engineering & science",
+    x %in% c("Health Professions", "Biological Sciences", "Agriculture",
+             "Natural Resources") ~ "Health & life sciences",
+    x %in% c("English", "Philosophy & Religion", "Visual & Performing Arts",
+             "Foreign Languages", "History", "Area & Ethnic Studies",
+             "Theology & Religion", "Liberal Arts", "Library Science",
+             "Communication", "Communications Tech", "Psychology", "Social Sciences") ~
+      "Humanities & social sciences",
+    TRUE ~ "Business, education & services"
+  )
+}
+grp_lv <- c("Engineering & science", "Health & life sciences",
+            "Humanities & social sciences", "Business, education & services")
+
+d <- raw |> mutate(grp = factor(grp_of(broad_field_short), levels = grp_lv))
+stopifnot(!anyNA(d$grp), sum(table(d$grp)) == n_majors)
+
+gt <- d |>
+  summarise(n = n(), med_pay = median(median_starting_salary),
+            med_exp = median(ai_exposure),
+            r_all  = cor(median_starting_salary, ai_exposure),
+            r_lang = cor(median_starting_salary, ai_exposure_language),
+            r_img  = cor(median_starting_salary, ai_exposure_image),
+            .by = grp) |>
+  arrange(grp)
+stopifnot(nrow(gt) == 4)
+r_within_all  <- weighted.mean(gt$r_all,  gt$n)
+r_within_lang <- weighted.mean(gt$r_lang, gt$n)
+r_within_img  <- weighted.mean(gt$r_img,  gt$n)
+pay_fold <- gt$med_pay[gt$grp == "Engineering & science"] /
+            gt$med_pay[gt$grp == "Humanities & social sciences"]
+
+gtag <- gt |>
+  mutate(x = 10300, y = 1.56,
+         lab = sprintf("n = %d   r = %s%.2f", n, if_else(r_all >= 0, "+", "\u2212"), abs(r_all)))
+
+# 分组明细：把 4 组各自包含哪些 CIP 大类摊开，读者可自行复核合并规则
+grp_members <- d |>
+  summarise(`所含 CIP 大类（broad_field_short）` = paste(sort(unique(broad_field_short)),
+                                                     collapse = " · "),
+            `专业数` = n(), .by = grp) |>
+  arrange(grp)
+stopifnot(sum(grp_members$`专业数`) == n_majors)
+
+# 引用方便：按组名取值的短函数
+gv <- function(col, g) gt[[col]][gt$grp == g]
+```
+
+```{r}
+#| label: fig-group
+#| echo: false
+#| fig-cap: "The same 285 majors split by broad field: engineering and science sit high on pay, humanities sit low, yet inside each group exposure and pay barely move the same way - the flat overall line is an average of four groups."
+#| fig-width: 9.4
+#| fig-height: 6.2
+fig3 <- ggplot(d, aes(x = median_starting_salary, y = ai_exposure)) +
+  geom_hline(yintercept = 0, colour = PAL$gold, linewidth = 0.65) +
+  geom_vline(data = gt, aes(xintercept = med_pay), colour = PAL$ink,
+             linewidth = 0.28, linetype = "22", inherit.aes = FALSE) +
+  geom_point(colour = PAL$ink, size = 1.05, alpha = 0.6, stroke = 0) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE,
+              colour = PAL$gold, linewidth = 0.9, linetype = "22") +
+  geom_text(data = gtag, aes(x = x, y = y, label = lab), inherit.aes = FALSE,
+            family = FAM_D, colour = PAL$ink, size = mm(TT_TYPE[["annot"]]),
+            fontface = "bold", hjust = 0, vjust = 1) +
+  facet_wrap(~ grp, nrow = 2) +
+  scale_x_log10(limits = XLIM, breaks = XBRK, labels = XLAB,
+                expand = expansion(mult = c(0, 0))) +
+  scale_y_continuous(limits = YLIM, breaks = seq(-1, 1.5, 0.5),
+                     expand = expansion(mult = c(0, 0))) +
+  labs(
+    title    = "Four groups, four different places, none of them a slope",
+    subtitle = paste0("Same axes as the first figure; the gold rule is AIOE = 0, the dashed gold line ",
+                      "is the group's\n", "least-squares fit and the dashed vertical rule is the ",
+                      "group's median pay"),
+    x = "median earnings one year after graduation (log scale)",
+    y = "average AIOE exposure",
+    caption  = tt_source("ai_salary_majors.csv", n_majors,
+      sprintf(paste0("all four panels share one pair of axes, so panels are comparable. Within-group ",
+                     "Pearson r runs from %.2f (business, education and services) to %+.2f (humanities ",
+                     "and social sciences); the n-weighted mean of the four is %+.3f, against %.4f ",
+                     "pooled. The groups sit at very different median pay ($%s to $%s) with similar ",
+                     "median exposure (%.3f to %.3f on the AIOE scale) - that is what flattens the ",
+                     "pooled line. Grouping 37 CIP families into four blocks is mine, not NCES."),
+              gv("r_all", "Business, education & services"),
+              gv("r_all", "Humanities & social sciences"),
+              r_within_all, r_all,
+              format(round(min(gt$med_pay)), big.mark = ","),
+              format(round(max(gt$med_pay)), big.mark = ","),
+              min(gt$med_exp), max(gt$med_exp)))
+  ) +
+  news() +
+  theme(panel.spacing = unit(16, "pt"))
+fig3
+```
+
+**读数**：四组的中位起薪从 $`r format(gv("med_pay", "Humanities & social sciences"), big.mark = ",")`（人文与社科）到 $`r format(gv("med_pay", "Engineering & science"), big.mark = ",")`（工科与理科）。
+
+**差 `r sprintf("%.2f", pay_fold)` 倍，中位暴露度却几乎并排。** 这就是整体相关被压平的全部机制：暴露度在组间没有系统差异，起薪有巨大的组间差异。
+
+组内相关是另一回事：四个组的符号不一致（末三列见下表），加权后只有 `r sprintf("%+.3f", r_within_all)`。人文社科那一组是明确的正号，因为**这组里暴露度最低的恰是舞蹈、戏剧、纯艺这些起薪两万出头的艺术类专业**——「最不容易被 AI 碰到的人文学科」正好是最穷的那一半。官方那句「部分人文学科又低薪又高暴露」只对另一半成立。
+
+图像那一支的正相关大半也是组间的：四个组的组内 r 都远低于池化的 `r sprintf("%+.3f", r_img)`，加权只剩 `r sprintf("%+.3f", r_within_img)`。**所以第三节那个 +0.33 主要是「工科整体又高又贵」，不是同专业之间的关系。**
+
+```{r}
+#| label: tbl-group
+#| echo: false
+gt |>
+  transmute(`组（37 → 4，非官方分类）` = as.character(grp), `专业数` = n,
+            `中位起薪` = format(round(med_pay), big.mark = ","),
+            `中位暴露度` = sprintf("%.3f", med_exp),
+            `r（总暴露）` = sprintf("%+.3f", r_all),
+            `r（语言）`   = sprintf("%+.3f", r_lang),
+            `r（图像）`   = sprintf("%+.3f", r_img)) |>
+  kable(format = "html",
+        caption = "四个组的组内相关与中位数，对应图 3（r 为组内 Pearson，起薪取美元原值；末三列同源同批专业）")
+```
+
+```{r}
+#| label: tbl-group-members
+#| echo: false
+grp_members |>
+  transmute(`组` = as.character(grp), `所含 CIP 大类` = `所含 CIP 大类（broad_field_short）`,
+            `专业数` = `专业数`) |>
+  kable(format = "html",
+        caption = "分组合并规则明细（左侧 37 个 CIP 大类折成 4 组，是我为读图做的合并，不是 NCES 分类；加起来 = 285）")
+```
+
+## 五、专业的暴露度是其职业的平均
+
+```{r}
+#| label: prep-fan
+#| echo: false
+# 六个专业：职业数从 1 到 36，覆盖「一个职业定生死」到「平均掉一整片职业」
+sel_cip <- c("5202", "1313", "5005", "5138", "2701", "5139")
+sel_short <- c(
+  "5202" = "Business administration",
+  "1313" = "Teacher education",
+  "5005" = "Drama & theatre",
+  "5138" = "Registered nursing",
+  "2701" = "Mathematics",
+  "5139" = "Practical nursing"
+)
+stopifnot(all(sel_cip %in% raw$cip4))
+ord <- order(raw$ai_exposure[match(sel_cip, raw$cip4)])
+
+fan <- occs |>
+  filter(cip4 %in% sel_cip) |>
+  left_join(raw |> select(cip4, mean_exp = ai_exposure, pay = median_starting_salary),
+            by = "cip4") |>
+  mutate(major = factor(unname(sel_short[cip4]), levels = unname(sel_short[sel_cip[ord]])))
+stopifnot(nrow(fan) == sum(raw$n_occupations[raw$cip4 %in% sel_cip]))
+
+# 确定性纵向抖动：按职业在组内的暴露度排序后交替偏移，不用随机数
+fan <- fan |>
+  arrange(major, ai_exposure) |>
+  mutate(rank_in = row_number(), .by = major) |>
+  mutate(off = ((rank_in - 1L) %% 5L - 2L) * 0.062,
+         is_end = rank_in == 1L | rank_in == n())
+
+fan_stat <- fan |>
+  summarise(n = n(), lo = min(ai_exposure), hi = max(ai_exposure),
+            mean_exp = first(mean_exp), pay = first(pay), .by = major) |>
+  mutate(rng = hi - lo,
+         right = sprintf("n = %d   $%sk", n,
+                         format(round(pay / 1000, 1), nsmall = 1)))
+
+# 只给「跨度 > 0.9」的两个专业标出两端职业，避免 88 个点被文字压死
+fan_lab <- fan |>
+  filter(is_end, major %in% c("Drama & theatre", "Teacher education"))
+
+occ_per_major <- raw$n_occupations
+n_shared_soc  <- occs |> count(soc) |> filter(n >= 10) |> nrow()
+top_share_soc <- occs |> count(soc, occupation) |> slice_max(n, n = 1)
+```
+
+```{r}
+#| label: fig-fan
+#| echo: false
+#| fig-cap: "Each major's exposure score is the plain average of the occupations it feeds: drama averages a dancer score of -2.67 with a writer score of +0.99, while practical nursing averages a single occupation and mathematics averages five that all sit near the top."
+#| fig-width: 9.4
+#| fig-height: 4.7
+fig4 <- ggplot() +
+  geom_segment(data = fan_stat, aes(y = as.numeric(major), yend = as.numeric(major),
+                                    x = -3.05, xend = 1.72),
+               colour = PAL$bg, linewidth = 2.7, lineend = "butt") +
+  geom_vline(xintercept = 0, colour = PAL$gold, linewidth = 0.7) +
+  geom_point(data = fan, aes(x = ai_exposure, y = as.numeric(major) + off),
+             colour = PAL$ink, size = 1.3, alpha = 0.75, stroke = 0) +
+  geom_point(data = fan_stat, aes(x = mean_exp, y = as.numeric(major)),
+             colour = PAL$gold, shape = 18, size = 3.2) +
+  geom_text_repel(data = fan_lab, aes(x = ai_exposure, y = as.numeric(major) + off,
+                                      label = occupation),
+                  family = FAM_D, colour = PAL$body, size = mm(TT_TYPE[["caption"]]),
+                  box.padding = 0.34, point.padding = 0.18, min.segment.length = 0,
+                  segment.colour = PAL$body, segment.size = 0.2, nudge_y = 0.17,
+                  max.overlaps = 20, seed = 20261021) +
+  geom_text(data = fan_stat, aes(x = 1.82, y = as.numeric(major), label = right),
+            family = FAM_D, colour = PAL$ink, size = mm(TT_TYPE[["annot"]]), hjust = 0) +
+  scale_y_continuous(breaks = seq_along(levels(fan$major)),
+                     labels = levels(fan$major), expand = expansion(add = 0.55)) +
+  scale_x_continuous(limits = c(-3.1, 2.85), breaks = seq(-2, 1, 1),
+                     expand = expansion(mult = c(0, 0))) +
+  labs(
+    title    = "A major's score is its occupations averaged, not the major itself",
+    subtitle = paste0("Every occupation behind six majors; the gold diamond is the major-level mean"),
+    x = "AIOE exposure of the occupation",
+    y = NULL,
+    caption  = tt_source("major_occupations.csv", nrow(fan),
+      sprintf(paste0("%d major-occupation links shown out of %s; the light track spans the full ",
+                     "range of occupational scores, so a bare stretch is a gap in that major's ",
+                     "destinations rather than a missing value. Occupations are stacked within a ",
+                     "row in sorted order so overlaps resolve; the mean gives each occupation one ",
+                     "vote, exactly as ai_exposure does. %d occupations are each claimed by ten or ",
+                     "more majors (the widest, %s, by %d), so generic management and teaching codes ",
+                     "pull many majors toward the middle."),
+              nrow(fan), format(n_occ_pairs, big.mark = ","), n_shared_soc,
+              top_share_soc$occupation, top_share_soc$n))
+  ) +
+  news()
+fig4
+```
+
+**读数**：`Drama & theatre` 的 `r fan_stat$n[fan_stat$major == "Drama & theatre"]` 个职业从 `r sprintf("%.2f", fan_stat$lo[fan_stat$major == "Drama & theatre"])`（`Dancers`）到 `r sprintf("%.2f", fan_stat$hi[fan_stat$major == "Drama & theatre"])`（`Writers and Authors`）。
+
+跨度 `r sprintf("%.2f", fan_stat$rng[fan_stat$major == "Drama & theatre"])`，而专业级均值只有 `r sprintf("%.3f", fan_stat$mean_exp[fan_stat$major == "Drama & theatre"])`——**它看起来落在「不暴露」的中段，纯粹是平均的产物**。
+
+`Teacher education` 更宽：`r fan_stat$n[fan_stat$major == "Teacher education"]` 个职业从 `r sprintf("%.2f", fan_stat$lo[fan_stat$major == "Teacher education"])`（`Fitness Trainers and Aerobics Instructors`）到 `r sprintf("%.2f", fan_stat$hi[fan_stat$major == "Teacher education"])`（历史、英语这类学科教师）。
+
+反方向的极端是 `Mathematics`：`r fan_stat$n[fan_stat$major == "Mathematics"]` 个职业全挤在 `r sprintf("%.2f", fan_stat$lo[fan_stat$major == "Mathematics"])` ~ `r sprintf("%.2f", fan_stat$hi[fan_stat$major == "Mathematics"])`。跨度只有 `r sprintf("%.2f", fan_stat$rng[fan_stat$major == "Mathematics"])`，所以它的均值是稳的。`Practical nursing` 只连 `r fan_stat$n[fan_stat$major == "Practical nursing"]` 个职业，分值就是 `Licensed Practical and Licensed Vocational Nurses` 的原值，没有平均。
+
+**同一列里，有的值是 `r max(occ_per_major)` 个职业的平均，有的就是单职业的原值**——这就是为什么百分位差十分以内不值得当真，也是为什么 `n_occupations` 必须和暴露度一起读。
+
+还有个量表层面的提醒：`r n_shared_soc` 个职业各被 10 个以上专业共用，最多的 `r top_share_soc$occupation` 被 `r top_share_soc$n` 个专业共用。这些通用管理与教师代码把一批专业往中间拉，专业之间的独立信息因此比 285 这个数字听起来少。
+
+```{r}
+#| label: tbl-fan
+#| echo: false
+fan_stat |>
+  transmute(`专业` = as.character(major), `职业数` = n,
+            `最低` = sprintf("%.2f", lo), `最高` = sprintf("%.2f", hi),
+            `跨度` = sprintf("%.2f", rng),
+            `均值（即 ai_exposure）` = sprintf("%.3f", mean_exp),
+            `起薪` = format(round(pay), big.mark = ",")) |>
+  kable(format = "html",
+        caption = "六个专业的职业分布数字，对应图 4（6 个专业、88 条专业×职业连线；跨度为 max − min，均值即 ai_salary_majors 的 ai_exposure）")
+```
+
+## 六、这份数据站不住脚的几处
+
+```{r}
+#| label: prep-anomaly
+#| echo: false
+# 全部只记录、不改数据
+n_missing_4yr <- sum(is.na(raw$median_salary_4yr))
+ratio_4yr <- raw$median_salary_4yr / raw$median_starting_salary
+med_ratio_4yr <- median(ratio_4yr, na.rm = TRUE)
+max_i <- which.max(ratio_4yr)
+max_ratio_4yr <- ratio_4yr[max_i]
+
+name_chk <- raw |>
+  select(cip4, a_name = field_of_study) |>
+  inner_join(occs |> distinct(cip4, m_name = field_of_study), by = "cip4",
+             relationship = "one-to-many")
+n_name_diff <- sum(name_chk$a_name != name_chk$m_name)
+n_multi_title <- occs |> summarise(k = n_distinct(field_of_study), .by = cip4) |>
+  filter(k > 1) |> nrow()
+
+n_pct_ties <- sum(duplicated(raw$ai_exposure_percentile))
+max_tie <- raw |> count(ai_exposure_percentile) |> slice_max(n, n = 1)
+
+pay_reg  <- raw$median_starting_salary[raw$cip4 == "5138"]
+pay_prac <- raw$median_starting_salary[raw$cip4 == "5139"]
+nurse_fold <- pay_reg / pay_prac
+
+top_row <- raw |> slice_max(median_starting_salary, n = 1)
+```
+
+| 现象 | 原始数字 | 处理 |
+| --- | --- | --- |
+| 两个文件对同一 `cip4` 的专业名不是同一套标题 | `r format(n_occ_pairs, big.mark = ",")` 行里 `r n_name_diff` 行不同名；`r n_multi_title` 个专业在职业表里有不止一个 6 位 CIP 标题 | 一律只用 `cip4` 连接，从不按名字 join；图 4 行名用我起的短名 |
+| 起薪的机构基础极不均匀 | `r n_single_inst` 个专业只来自 1 所院校，`r n_le10_inst` 个不超过 10 所（中位 `r med_inst` 所） | 不剔除（一刀切会连同顶端一起砍掉），但在图 1 直标里写明其中两个的院校数 |
+| 全库最高起薪是个单机构值 | `r top_row$field_of_study` $`r format(top_row$median_starting_salary, big.mark = ",")`，来自 `r top_row$n_institutions` 所院校、`r format(top_row$n_graduates, big.mark = ",")` 个毕业生 | 不改数；它不在图 1 被点名的 9 个里，读「最贵专业」这个名次时必须知道它只代表 1 所院校 |
+| 4 年薪资缺失集中在单机构专业 | `r n_missing_4yr` 个专业缺 `median_salary_4yr`，全部是 1 所院校的专业；没有一个专业 4 年低于 1 年 | 本页只用 1 年薪资；4 年列只在这一行做一致性检查 |
+| 4 年 ÷ 1 年 的倍数跨度很大 | 中位 `r sprintf("%.2f", med_ratio_4yr)` 倍，最大 `r sprintf("%.2f", max_ratio_4yr)` 倍（`r raw$field_of_study[max_i]`：$`r format(raw$median_starting_salary[max_i], big.mark = ",")` → $`r format(raw$median_salary_4yr[max_i], big.mark = ",")`） | 不拿 4 年列替代 1 年列做稳健性检查，两者不是同一件事 |
+| `ai_exposure_percentile` 大量并列 | `r n_pct_ties` 个专业与别的专业同百分位，最多 `r max_tie$n` 个专业同分（`r max_tie$ai_exposure_percentile`） | 百分位只在整数量级上读；图 1 的纵向位置用原分数 |
+| AIOE 的 0 不是专业的平均 | 只有 `r n_below0` 个专业（`r sprintf("%.1f", pct_below0)`%）在 0 以下，专业中位 `r sprintf("%.3f", med_exp)` | 象限横线用 AIOE 原点而非专业中位数，图 1 脚注与正文同时说明 |
+| 「注册护理约 7.5 万」只对一个 CIP 成立 | `Registered Nursing`（5138）$`r format(pay_reg, big.mark = ",")`；`Practical Nursing`（5139）$`r format(pay_prac, big.mark = ",")`，是**全库最低起薪**，两者差 `r sprintf("%.1f", nurse_fold)` 倍 | 不合并护理类；两者在图 1 里各标各的 |
+| 总暴露度几乎等于语言维度 | 对语言 `r sprintf("%.3f", r_lang_tot)`、对图像 `r sprintf("%.3f", r_img_tot)`；语言与图像之间 `r sprintf("%.3f", r_lang_img)` | 不用 `ai_exposure` 单列下结论，第三节起拆两支分别画 |
+| 通用职业代码稀释专业信息 | `r n_shared_soc` 个职业被 ≥10 个专业共用（最多 `r top_share_soc$occupation`，`r top_share_soc$n` 个专业）；每专业职业数 1 ~ `r max(occ_per_major)`，中位 `r median(occ_per_major)` | 图 4 用少数几个专业拆开给人看，不做职业层面的排名 |
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/ai_salary_majors.csv`（`r n_majors` × 13，一行一专业，`cip4` 唯一）；`data/major_occupations.csv`（`r format(n_occ_pairs, big.mark = ",")` × 7） |
+| 覆盖 | `r n_majors` 个学士专业 / `r n_soc` 个 SOC 职业 / `r n_distinct(raw$broad_field_short)` 个 CIP 大类；`n_graduates` 合计 `r format(sum(raw$n_graduates), big.mark = ",")` |
+| 入图样本 | 图 1 / 3 用全部 `r n_majors`；图 2 每个维度 `r tt_flow(n_majors, 190, "弃掉该维度中间三分之一")`；图 4 只画 6 个专业 |
+| 起薪口径 | `median_starting_salary` = 毕业一年后收入中位数，院校级值的**未加权中位数**；不是应届、不是生涯起薪，也不按毕业生人数加权 |
+| 暴露口径 | `ai_exposure` = 该专业全部去向职业 AIOE 的**算术平均**（`n_occupations` 见各表）；AIOE 已标准化（均值 0、SD 1），0 = 平均职业 |
+| 相关性口径 | 全部为 Pearson；Spearman 与 log 起薪两档作为替换检验写在图 1；置信区间用 Fisher z 变换，未对分组或机构规模做任何调整 |
+| 分组口径 | 37 个 `broad_field_short` 折成 4 组是我为读图做的合并，**不是 NCES 分类**；规则摊在第四节的「分组合并规则明细」表里 |
+| 不作为证据的列 | `ai_exposure_percentile`（与 `ai_exposure` 同源，只换刻度）；`median_salary_4yr`（缺失集中在单机构专业，且与 1 年列不同口径）；`n_institutions` / `n_graduates` 只用来给结论定权重，不做自变量 |
+| 明确不画的东西 | 不画 37 个 `broad_field_short` 的逐类排名（多数类不足 5 个专业，排的是抽样噪声）；不画国家或院校层面（数据里没有）；不画时间趋势（Scorecard 快照只有一个版本）；不把暴露度画成「安全 / 危险」二分（AIOE 不含替代概率，二分等于替数据下结论） |
+| 数字来源 | 正文每个内联数字都来自本页分析代码的同一份聚合，经 `sprintf` / `format` 定型 |
+
+```{r}
+#| label: typography-audit
+#| include: false
+audit <- bind_rows(
+  tt_audit(fig1) |> mutate(图 = "图 1", .before = 1),
+  tt_audit(fig2) |> mutate(图 = "图 2", .before = 1),
+  tt_audit(fig3) |> mutate(图 = "图 3", .before = 1),
+  tt_audit(fig4) |> mutate(图 = "图 4", .before = 1)
+)
+n_size_used <- n_distinct(audit$size[!is.na(audit$size)])
+n_family    <- n_distinct(audit$family[!is.na(audit$family)])
+n_off       <- sum(!audit$in_ladder)
+stopifnot(n_size_used <= TT_TYPE_MAX, n_family <= TT_FAMILY_MAX, n_off == 0)
+stopifnot(length(PAL) <= 5, all(nchar(unlist(PAL)) == 7L))
+cat(sprintf("typo-audit: sizes %d/%d, families %d/%d, off-ladder %d, colours %d\n",
+            n_size_used, TT_TYPE_MAX, n_family, TT_FAMILY_MAX, n_off, length(PAL)),
+    file = stderr())
+cat(sprintf("num-check: r_all=%.4f r_lang=%.3f r_img=%.3f r_within=%.3f quad=%s\n",
+            r_all, r_lang, r_img, r_within_all,
+            paste(qt$n, collapse = "/")), file = stderr())
+```
