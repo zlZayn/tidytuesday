@@ -1,0 +1,699 @@
+---
+title: "蛙与蟾名录：七成的抽屉是空的"
+subtitle: "TidyTuesday · 2026-10-13 (Week 41) · AmphibiaWeb 蛙与蟾条目 8,018 行"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 七成的抽屉是空的
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(purrr)
+  library(ggplot2)
+  library(knitr)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+# ---- 本周色彩（只在本周生效；共享 theme 不含任何色值）----
+# 语义绑定：青柠 = 写过正文 · 珊瑚 = 只有名字 · 雾灰 = 部分写过 / 刻度与底线 · 骨白 = 主文字。
+# 这三个含义在三张图里不换位：青柠永远是「有」，珊瑚永远是「没有」，雾灰永远是「介于」或刻度。
+PAL <- list(
+  bg    = "#0E1B21",   # 深墨青：整幅底色，像柜内背板
+  lime  = "#C8F04B",   # 青柠 —— 写过正文
+  coral = "#F0735D",   # 珊瑚 —— 只有名字 / 一个属整个没写
+  mist  = "#8FA3AD",   # 雾灰 —— 部分写过、底线、刻度、次级注记
+  bone  = "#E9F2F4"    # 骨白 —— 标题、科名、主文字
+)
+
+# ---- 本周字体决策：两族分工，打字机式标本标签 ----
+# 标题 / 副标题 / 科名 = Segoe UI；所有数字与注记 = Consolas（沿自然史博物馆标签的观感）。
+# 家族数 2 <= TT_FAMILY_MAX = 2。首屏 KPI 走页面自身字体栈，不参与图内决策。
+FAM_T <- TT_FAMILY[["text"]]
+FAM_D <- TT_FAMILY[["data"]]
+mm    <- function(pt) pt / .pt          # element_text 用 pt，geom_text 用 mm
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi,
+                      dev.args = list(bg = PAL$bg))
+
+raw <- read_csv("../data/frogs_and_toads_amphibiaweb.csv", show_col_types = FALSE)
+
+# 散文式字段：能读、能算长度，但不整段进表（最长 60,805 字符）
+PROSE <- c("description", "distribution", "life_history", "larva",
+           "trends_and_threats", "comments")
+
+# 抽屉底板：暗底、不画网格、不画边框，只留一条雾灰发丝底线做抽屉底 + 一把骨白中轴做抽屉脊
+drawer <- function(p) {
+  p +
+    tt_base(bg = PAL$bg, ink = PAL$bone, body = PAL$mist,
+            grid = PAL$bg, family = FAM_T) +
+    theme(
+      panel.background = element_rect(fill = PAL$bg, colour = NA),
+      panel.border     = element_blank(),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.line.x      = element_line(colour = PAL$mist, linewidth = 0.3),
+      axis.ticks       = element_line(colour = PAL$mist, linewidth = 0.3),
+      plot.subtitle    = element_text(family = FAM_T, colour = PAL$mist,
+                                      size = TT_TYPE[["subtitle"]], hjust = 0,
+                                      margin = margin(b = 12)),
+      plot.caption     = element_text(family = FAM_T, colour = PAL$mist,
+                                      size = TT_TYPE[["caption"]], hjust = 0,
+                                      margin = margin(t = 12), lineheight = 1.4),
+      axis.title       = element_text(family = FAM_T, colour = PAL$mist,
+                                      size = TT_TYPE[["axis_title"]]),
+      axis.text        = element_text(family = FAM_D, colour = PAL$bone,
+                                      size = TT_TYPE[["axis_text"]]),
+      legend.text      = element_text(family = FAM_T, colour = PAL$bone,
+                                      size = TT_TYPE[["annot"]]),
+      legend.position  = "top",
+      legend.justification = "left",
+      legend.margin    = margin(b = 6),
+      plot.margin      = margin(16, 20, 12, 16)
+    )
+}
+```
+
+```{r}
+#| label: prep
+#| echo: false
+n_raw <- nrow(raw)
+n_col <- ncol(raw)
+stopifnot(n_distinct(raw$amphib_id) == n_raw)                  # 一行一个物种
+stopifnot(n_distinct(raw$ordr) == 1L, raw$ordr[1] == "Anura")   # 全是无尾目
+
+fam_cnt  <- raw |> count(family, sort = TRUE)
+gen_cnt  <- raw |> count(genus, sort = TRUE)
+n_fam    <- nrow(fam_cnt)
+n_gen    <- nrow(gen_cnt)
+id_span  <- diff(range(raw$amphib_id)) + 1
+n_id_gap <- id_span - n_raw
+
+# ---- 记录分级：六个正文式字段里有几个非空 ----
+d <- raw |>
+  mutate(depth = rowSums(!is.na(across(all_of(PROSE)))),
+         cls   = factor(case_when(depth == 0 ~ "none",
+                                  depth <= 3 ~ "partial",
+                                  TRUE      ~ "full"),
+                        levels = c("full", "partial", "none")))
+n_none    <- sum(d$depth == 0)
+n_partial <- sum(d$depth %in% 1:3)
+n_full    <- sum(d$depth >= 4)
+n_written <- n_raw - n_none
+stopifnot(n_none + n_partial + n_full == n_raw)
+
+# ---- 科级 ----
+fam_tab <- d |>
+  summarise(n = n(), written = sum(depth > 0),
+            gen = n_distinct(genus), share = written / n, .by = family) |>
+  arrange(desc(n))
+top_fam <- fam_tab |> slice_head(n = 14)
+n_top14 <- sum(top_fam$n)
+cov_big <- fam_tab |> filter(n >= 100)
+fam_lo  <- cov_big |> slice_min(share, n = 1, with_ties = FALSE)
+fam_hi  <- cov_big |> slice_max(share, n = 1, with_ties = FALSE)
+cov_ratio <- fam_hi$share / fam_lo$share
+cov_cor   <- cor(cov_big$n, cov_big$share)
+
+# ---- 属级 ----
+gen_tab <- d |>
+  summarise(n = n(), written = sum(depth > 0), share = written / n,
+            .by = c(family, genus))
+n_gen_bare <- sum(gen_tab$share == 0)
+n_gen_full <- sum(gen_tab$share == 1)
+n_gen_mix  <- sum(gen_tab$share > 0 & gen_tab$share < 1)
+
+# ---- 国家：isocc 是逗号分隔的 ISO 码，一个物种可出现在多个国家 ----
+ctry_pairs <- d |>
+  filter(!is.na(isocc)) |>
+  mutate(iso = str_split(isocc, ",")) |>
+  unnest(iso) |>
+  mutate(iso = str_trim(iso)) |>
+  filter(nzchar(iso))
+n_species_geo <- n_distinct(ctry_pairs$amphib_id)
+n_pairs       <- nrow(ctry_pairs)
+n_country     <- n_distinct(ctry_pairs$iso)
+n_na_isocc    <- sum(is.na(d$isocc))
+
+# ISO 3166-1 alpha-2 → 国名（只为可能入图的码手写，纯粹为了读图，不参与任何计算）
+ISO_NAME <- c(BR = "Brazil", CO = "Colombia", EC = "Ecuador", PE = "Peru",
+              CN = "China", MG = "Madagascar", PG = "Papua New Guinea",
+              IN = "India", ID = "Indonesia", VE = "Venezuela",
+              MY = "Malaysia", VN = "Vietnam")
+
+ctry_tab <- ctry_pairs |>
+  summarise(full    = sum(cls == "full"),
+            partial = sum(cls == "partial"),
+            none    = sum(cls == "none"),
+            .by = iso) |>
+  mutate(species = full + partial + none,
+         share   = (full + partial) / species,
+         name    = if_else(iso %in% names(ISO_NAME), ISO_NAME[iso], iso))
+top12 <- ctry_tab |> arrange(desc(species)) |> slice_head(n = 12)
+
+# 图 3 读数要用的科构成（不手打，全部现算）
+ctry_fam <- ctry_pairs |>
+  summarise(n = n(), wn = sum(cls != "none"), .by = c(iso, family))
+pick_fam <- function(cc, k = 2) {
+  ctry_fam |> filter(iso == cc) |> arrange(desc(n)) |> slice_head(n = k) |>
+    mutate(share = wn / n)
+}
+mg_fam <- pick_fam("MG"); vn_fam <- pick_fam("VN")
+mg_mant_n   <- ctry_fam$n[ctry_fam$iso == "MG" & ctry_fam$family == "Mantellidae"]
+mg_mant_sh  <- ctry_fam$wn[ctry_fam$iso == "MG" & ctry_fam$family == "Mantellidae"] / mg_mant_n
+n_mant_only_mg <- sum(str_detect(stats::na.omit(d$isocc[d$family == "Mantellidae"]), "^MG$"))
+
+# ---- 署名 ----
+n_sub_rows   <- sum(!is.na(d$submittedby))
+n_sub_people <- n_distinct(d$submittedby)
+n_sub_stub   <- sum(!is.na(d$submittedby) & d$depth == 0)
+sub_tab  <- d |> filter(!is.na(submittedby)) |> count(submittedby, sort = TRUE)
+sub_top  <- sub_tab |> slice_head(n = 8)
+sub_dom  <- d |>
+  filter(submittedby %in% sub_top$submittedby) |>
+  count(submittedby, family) |>
+  mutate(p = n / sum(n), .by = submittedby) |>
+  slice_max(n, n = 1, with_ties = FALSE, by = submittedby)
+lock1 <- sub_dom |> arrange(desc(n)) |> slice(1)
+
+edit_tab    <- d |> filter(!is.na(editedby)) |> count(editedby, sort = TRUE)
+n_edit_rows <- sum(!is.na(d$editedby))
+
+# ---- 日期 ----
+n_na_submit <- sum(is.na(d$submit_date))
+n_na_edit   <- sum(is.na(d$edit_date))
+n_both_date <- sum(!is.na(d$submit_date) & !is.na(d$edit_date))
+n_no_date   <- sum(is.na(d$submit_date) & is.na(d$edit_date))
+# 空白条目里仍然留下过编辑日期的少数行（正文要交代）
+n_none_dated <- sum(d$depth == 0 & !is.na(d$edit_date))
+lag_years   <- as.numeric(d$edit_date - d$submit_date)
+lag_years   <- lag_years[!is.na(lag_years)] / 365.25
+lag_med     <- median(lag_years)
+submit_stop <- max(d$submit_date, na.rm = TRUE)
+n_submit_last <- sum(format(d$submit_date, "%Y") == format(submit_stop, "%Y"),
+                     na.rm = TRUE)
+
+# ---- 异常 ----
+refs_v    <- d$refs[!is.na(d$refs)]
+n_refs    <- length(refs_v)
+n_refs_ph <- sum(nchar(str_remove_all(refs_v, "<p>|\\s")) == 0)
+desc_v    <- d$description[!is.na(d$description)]
+pct_desc_html <- 100 * mean(str_detect(desc_v, "<[a-zA-Z/]"))
+n_clade      <- sum(!is.na(d$clade))
+n_clade_rank <- sum(unique(d$clade[!is.na(d$clade)]) %in% d$genus)
+n_intro      <- sum(!is.na(d$intro_isocc))
+n_intro_bad  <- sum(str_starts(d$intro_isocc[!is.na(d$intro_isocc)], ","))
+n_lannoo     <- sum(!is.na(d$lannoo))
+lannoo_med   <- median(nchar(d$lannoo), na.rm = TRUE)
+n_intl       <- sum(!is.na(d$interntnl_status))
+n_nat        <- sum(!is.na(d$national_status))
+n_reg        <- sum(!is.na(d$regional_status))
+
+# ---- 字段覆盖率（口径表用）----
+field_tab <- tibble(
+  field  = names(raw),
+  type   = map_chr(raw, \(x) if (inherits(x, "Date")) "date"
+                   else if (is.numeric(x)) "num" else "chr"),
+  filled = map_int(raw, \(x) sum(!is.na(x)))
+) |>
+  mutate(pct = filled / n_raw) |>
+  arrange(desc(pct))
+
+# ---- 图 1：镜像条（科级）----
+f1 <- top_fam |>
+  mutate(none = n - written,
+         y    = rev(row_number()))
+f1_hi <- f1 |> slice_max(share, n = 1, with_ties = FALSE)
+f1_lo <- f1 |> slice_min(share, n = 1, with_ties = FALSE)
+x_cap <- max(f1$none)
+
+# ---- 图 2：属级抖点 ----
+fam_y <- f1 |> select(family, y)
+g2 <- gen_tab |>
+  filter(family %in% top_fam$family) |>
+  left_join(fam_y, by = "family") |>
+  mutate(share100 = 100 * share, bare = share == 0)
+set.seed(20261013)
+g2 <- g2 |>
+  mutate(xj = share100 + runif(n(), -1.7, 1.7),
+         yj = y + runif(n(), -0.26, 0.26))
+g2_lane <- g2 |>
+  summarise(gen = n(), med = median(share100), .by = c(family, y)) |>
+  arrange(y)
+n_gen_plotted <- nrow(g2)
+big_marks <- g2 |> slice_max(n, n = 4, with_ties = FALSE) |> arrange(desc(n))
+
+# 入图这批属的分化程度：科内离散 vs 科间离散（正文结论就靠这两个数）
+n_g2_bare   <- sum(g2$share == 0)
+n_g2_full   <- sum(g2$share == 1)
+n_g2_mix    <- n_gen_plotted - n_g2_bare - n_g2_full
+sd_within   <- mean(g2 |> summarise(s = sd(share), .by = family) |> pull(s), na.rm = TRUE)
+sd_between  <- sd(g2 |> summarise(m = median(share), .by = family) |> pull(m))
+rng_within  <- mean(g2 |> summarise(r = max(share) - min(share), .by = family) |> pull(r))
+hyper_g     <- g2 |> filter(family == "Hyperoliidae")
+strab_g     <- g2 |> filter(family == "Strabomantidae")
+
+# ---- 图 3：国家 100% 堆叠 ----
+f3 <- top12 |>
+  mutate(share_pct = 100 * share) |>
+  arrange(share_pct) |>
+  mutate(x = row_number(),
+         n_lab = format(species, big.mark = ","))
+# 堆叠顺序由自己算，不依赖 position_stack 的方向：自下而上 full -> partial -> none，
+# 这样青柠段贴着基线，各国覆盖率可以直接比高度；标签的 mid 与矩形用同一份累加。
+CLS_UP  <- c("full", "partial", "none")
+f3_long <- f3 |>
+  select(x, full, partial, none) |>
+  pivot_longer(c(full, partial, none), names_to = "cls", values_to = "k") |>
+  mutate(cls = factor(cls, levels = CLS_UP)) |>
+  group_by(x) |>
+  arrange(match(cls, CLS_UP), .by_group = TRUE) |>
+  mutate(sh  = k / sum(k),
+         bot = cumsum(sh) - sh,
+         top = cumsum(sh),
+         mid = (top + bot) / 2) |>
+  ungroup()
+f3_lab <- f3_long |> filter(sh >= 0.07)
+
+# ---- 溯源与自检 ----
+stopifnot(
+  sum(f1$written) == sum(d$depth > 0 & d$family %in% top_fam$family),
+  nrow(f3_long) == 3 * nrow(f3),
+  abs(sum(f3_long$sh) - nrow(f3)) < 1e-9,
+  n_gen_plotted == sum(top_fam$gen),
+  n_species_geo + n_na_isocc == n_raw,
+  n_sub_stub == 0,
+  n_no_date + 42 == n_none          # 空白条目里只有 42 行留下过日期
+)
+
+flow_f1 <- tt_flow(n_raw, n_raw, "全表入图，无剔除")
+flow_f2 <- tt_flow(n_raw, n_gen_plotted,
+                   sprintf("%d 个属不在入图的 14 个科里", n_gen - n_gen_plotted))
+flow_f3 <- tt_flow(n_raw, n_pairs,
+                   sprintf("%d 个物种没有 isocc；一个物种按 isocc 列表在每个国家各计一次，故记为「物种-国家」对而非物种数",
+                           n_na_isocc))
+```
+
+<div style="display:flex;align-items:baseline;gap:12px;margin:26px 0 4px;flex-wrap:wrap">
+<span style="font-size:44px;font-weight:700;color:#C8F04B;line-height:1">`r sprintf("%.1f", 100 * n_none / n_raw)`%</span>
+<span style="font-size:15px;color:#E9F2F4">的条目没有一句正文</span>
+<span style="font-size:15px;color:#8FA3AD">·</span>
+<span style="font-size:26px;font-weight:700;color:#F0735D;line-height:1">`r n_intl`</span>
+<span style="font-size:15px;color:#E9F2F4">行有 IUCN 状态</span>
+<span style="font-size:15px;color:#8FA3AD">·</span>
+<span style="font-size:26px;font-weight:700;color:#E9F2F4;line-height:1">`r sprintf("%.1f", cov_ratio)`×</span>
+<span style="font-size:15px;color:#E9F2F4">科与科之间的覆盖率差</span>
+</div>
+
+`r format(n_raw, big.mark = ",")` 行、`r n_col` 列、`r n_fam` 个科、`r n_gen` 个属——看上去像一部蛙类百科，实际上是一册**名录加 `r sprintf("%.1f", 100 * n_written / n_raw)`% 的物种志**。
+
+其中 `r format(n_none, big.mark = ",")` 行（`r sprintf("%.1f", 100 * n_none / n_raw)`%）除了名字、科、属和分布码之外什么都没有，连作者和日期都没有。剩下 `r format(n_written, big.mark = ",")` 行写过正文。
+
+这 `r format(n_written, big.mark = ",")` 行不是随机分布的：**一个科被写了几分，取决于当年刚好是谁在写这个科**。
+
+这条主线决定了本页的读法：所有「差异」都是**记录口径的差异**，不是蛙类本身的差异。IUCN 那一列 `r format(n_raw, big.mark = ",")` 行全空，官方问题清单里的第三条在本快照里无法回答；`distribution` 是散文式的范围描述而不是产地坐标，所以本页也没有地图。
+
+## 一、先把口径钉死：这是 8,018 个物种，不是一个物种的 8,018 次观察
+
+`r flow_f1`
+
+**粒度**：`r format(n_raw, big.mark = ",")` 行 = `r format(n_raw, big.mark = ",")` 个物种（`amphib_id` 全表唯一），全部是 `ordr == "Anura"`，落在 `r n_fam` 个科、`r n_gen` 个属里。**不是**观察记录，也不是产地坐标——一行就是一个物种条目，量的是「这个物种在档案里被写了多少」，不是「这个物种有多少」。
+
+一个侧面的口径证据：`amphib_id` 的取值跨度是 `r format(id_span, big.mark = ",")`，而实际只有 `r format(n_raw, big.mark = ",")` 行，缺口 `r format(n_id_gap, big.mark = ",")`。原始 XML dump 在入库前被过滤成只有无尾目，缺口里既有别的目也有已撤记录；**因此不能拿 id 缺口推算物种总数**。
+
+```{r}
+#| label: tbl-fields
+#| echo: false
+field_tab |>
+  transmute(字段 = field, 类型 = type,
+            `非空行数` = format(filled, big.mark = ","),
+            `非空占比` = sprintf("%.1f%%", 100 * pct)) |>
+  kable(format = "html",
+        caption = "口径表：26 个字段各自填了多少（按非空占比降序）。这张表是后面所有图的前提——空白不是 0，是「没记录」")
+```
+
+**三类字段，三种读法。**
+
+- **标识与分类**（`amphib_id` / `ordr` / `family` / `genus` / `specificepithet` / `isocc`）：100% 或 99.6% 有值，是名录的骨架。
+- **散文**（`description` / `distribution` / `life_history` / `larva` / `trends_and_threats` / `comments`）：`r sprintf("%.1f", 100 * n_written / n_raw)`% 的条目至少有一块，最多的是 `distribution`（`r format(field_tab$filled[field_tab$field == "distribution"], big.mark = ",")` 行）。
+- **评估与署名**（`interntnl_status` / `national_status` / `regional_status` / `submittedby` / `edit_date`）：几乎为空。
+
+最后一类里 `interntnl_status` 是 `r n_intl` 行有值。官方问题清单里「IUCN 状态如何在科或地区间变化」这一条，本快照没有可用数据；本页不会用别的列去凑一个替代品。
+
+## 二、科的抽屉：写得最满的科，是最小的科
+
+```{r}
+#| label: fig-family
+#| echo: false
+#| fig-cap: "Coverage across frog families runs from 9 to 90 percent, and the largest families are among the emptiest."
+#| fig-width: 9.4
+#| fig-height: 6.4
+fig1 <- drawer(
+  ggplot(f1, aes(y = y)) +
+  geom_col(aes(x = -none), fill = PAL$coral, width = 0.58, orientation = "y") +
+  geom_col(aes(x = written), fill = PAL$lime, width = 0.58, orientation = "y") +
+  geom_vline(xintercept = 0, colour = PAL$bone, linewidth = 0.5) +
+  geom_text(aes(x = -none - 26, label = format(none, big.mark = ",")),
+            hjust = 1, family = FAM_D, colour = PAL$coral,
+            size = mm(TT_TYPE[["annot"]])) +
+  geom_text(aes(x = written + 26, label = format(written, big.mark = ",")),
+            hjust = 0, family = FAM_D, colour = PAL$lime,
+            size = mm(TT_TYPE[["annot"]])) +
+  scale_y_continuous(breaks = f1$y, labels = f1$family,
+                     expand = expansion(add = 0.45)) +
+  scale_x_continuous(breaks = c(-750, -500, -250, 0, 250, 500),
+                     labels = c("750", "500", "250", "0", "250", "500"),
+                     limits = c(-x_cap * 1.12, 520),
+                     expand = c(0, 0)) +
+  labs(
+    title    = "The bigger the family, the emptier the drawer",
+    subtitle = paste0("Top 14 families by species count; left is name only, ",
+                      "right has account text"),
+    x = "species in the family", y = NULL,
+    caption  = tt_source("frogs_and_toads_amphibiaweb.csv", n_raw,
+      sprintf(paste0("both directions share one linear scale, so a short lime side is the ",
+                     "finding and not a small family; the bone line is the zero spine. Across ",
+                     "the %d families with at least 100 species, coverage spans %.1f%% (%s) to ",
+                     "%.1f%% (%s), a %.1f-fold gap, and its correlation with family size is ",
+                     "only %.2f."),
+              nrow(cov_big), 100 * fam_lo$share, fam_lo$family,
+              100 * fam_hi$share, fam_hi$family, cov_ratio, cov_cor))
+  ) +
+  theme(axis.text.y = element_text(family = FAM_T, colour = PAL$bone,
+                                   size = TT_TYPE[["axis_text"]]))
+)
+fig1
+```
+
+**读数**：入图的 14 个科占了全表 `r format(n_top14, big.mark = ",")` 行（`r sprintf("%.1f", 100 * n_top14 / n_raw)`%）。左手珊瑚条是**只有名字**的条目，右手青柠条是至少写过一块正文的条目，两侧共用一根线性轴——所以青柠条短是真的写得少，不是科小。
+
+两极不在这 14 个科里。把 `n >= 100` 的 `r nrow(cov_big)` 个科一起看，两端是 `r fam_hi$family` 和 `r fam_lo$family`（两者排在第 15、16 位，所以不在图 1 上）。
+
+`r fam_hi$family` 有 `r fam_hi$n` 个物种，写到 `r sprintf("%.0f", 100 * fam_hi$share)`%；`r fam_lo$family` 有 `r fam_lo$n` 个物种，只有 `r sprintf("%.0f", 100 * fam_lo$share)`%。**两端差 `r sprintf("%.1f", cov_ratio)` 倍**。
+
+而写得最少的那一档坐着最大的两个科：Hylidae（`r format(f1$n[f1$family == "Hylidae"], big.mark = ",")` 个物种）只有 `r sprintf("%.0f", 100 * f1$share[f1$family == "Hylidae"])`% 有正文，Strabomantidae（`r format(f1$n[f1$family == "Strabomantidae"], big.mark = ",")` 个物种）只有 `r sprintf("%.0f", 100 * f1$share[f1$family == "Strabomantidae"])`%。
+
+在 `n >= 100` 的 `r nrow(cov_big)` 个科里，科的大小与覆盖率的相关只有 `r sprintf("%.2f", cov_cor)`——**规模不买正文**。
+
+这张图能说的：科与科之间的覆盖率差异到了十倍量级。这张图不能说的：不能反推「哪个科被研究得少」——覆盖率是**这个档案写了什么**，不是**这个类群被研究了多少**。
+
+```{r}
+#| label: tbl-family
+#| echo: false
+f1 |>
+  arrange(desc(y)) |>
+  transmute(科 = family, `属数` = gen, `物种数` = n,
+            `有正文` = written, `只有名字` = none,
+            `覆盖率` = sprintf("%.1f%%", 100 * share)) |>
+  kable(format = "html",
+        caption = "图 1 的原始数字（覆盖率 = 有正文 ÷ 物种数；与图上同一份聚合）")
+```
+
+## 三、科内差距比科间还大
+
+```{r}
+#| label: fig-genus
+#| echo: false
+#| fig-cap: "Inside a single family some genera are fully written and others are blank, so a family average describes almost none of its genera."
+#| fig-width: 9.4
+#| fig-height: 6.2
+fig2 <- drawer(
+  ggplot(g2, aes(x = xj, y = yj)) +
+  geom_point(aes(colour = bare, size = n), alpha = 0.80) +
+  geom_segment(aes(x = med, xend = med, y = y - 0.30, yend = y + 0.30),
+               data = g2_lane, inherit.aes = FALSE,
+               colour = PAL$bone, linewidth = 0.55, lineend = "round") +
+  geom_text(aes(x = if_else(share100 > 50, xj - 3.4, xj + 3.4), y = yj + 0.40,
+                label = sprintf("%s (%d)", genus, n)),
+            data = big_marks, inherit.aes = FALSE,
+            hjust = if_else(big_marks$share100 > 50, 1, 0),
+            family = FAM_D, colour = PAL$bone, size = mm(TT_TYPE[["annot"]])) +
+  scale_colour_manual(values = c(`FALSE` = PAL$lime, `TRUE` = PAL$coral),
+                      labels = c(`FALSE` = "at least one account",
+                                 `TRUE`  = "no account at all"),
+                      name = NULL) +
+  scale_size_area(max_size = 2.6, guide = "none") +
+  scale_x_continuous(breaks = c(0, 25, 50, 75, 100),
+                     labels = c("0", "25", "50", "75", "100"),
+                     limits = c(-4, 108), expand = c(0, 0)) +
+  scale_y_continuous(breaks = g2_lane$y, labels = g2_lane$family,
+                     limits = c(0.35, 14.75), expand = c(0, 0)) +
+  labs(
+    title    = "A family's average hides its genera",
+    subtitle = paste0("Share of each genus with any account text; one dot per genus, ",
+                      "laid into the same 14 families"),
+    x = "share of the genus's species with account text (%)", y = NULL,
+    caption  = tt_source("frogs_and_toads_amphibiaweb.csv", n_gen_plotted,
+      sprintf(paste0("one dot per genus (n = %d); dot area is proportional to the number of ",
+                     "species in the genus, and the bone tick marks that family's median genus. ",
+                     "Inside these 14 families %d genera have no account at all, %d are fully ",
+                     "written and %d are mixed, so the middle is the common case. The mean ",
+                     "within-family standard deviation of genus share is %.2f, against %.2f ",
+                     "between the family medians. Dots are jittered inside their lane, so a ",
+                     "dense pile means many genera share that value, not a missing dot."),
+              n_gen_plotted, n_g2_bare, n_g2_full, n_g2_mix, sd_within, sd_between))
+  ) +
+  theme(axis.text.y = element_text(family = FAM_T, colour = PAL$bone,
+                                   size = TT_TYPE[["axis_text"]]))
+)
+fig2
+```
+
+**读数**：入图的 `r n_gen_plotted` 个属里，`r n_g2_bare` 个一个条目都没写过（全表 `r n_gen_bare` 个），`r n_g2_full` 个写得一个不剩（全表 `r n_gen_full` 个），其余 `r n_g2_mix` 个是半写不写。所以这里**不是**清晰的两层结构——中间地带才是多数。
+
+真正值得注意的是离散程度：**科内的属级离散和科间一样大**。属级覆盖率的科内标准差平均 `r sprintf("%.2f", sd_within)`，而科中位数之间的标准差只有 `r sprintf("%.2f", sd_between)`。
+
+平均每个科内部，最高与最低的属差 `r sprintf("%.0f", 100 * rng_within)` 个百分点。`r f1_hi$family` 的中位属写到 `r sprintf("%.0f", g2_lane$med[g2_lane$family == f1_hi$family])`%，它内部完全空白的属是 `r sum(hyper_g$share == 0)` 个（共 `r nrow(hyper_g)` 个属）；`r f1_lo$family` 的中位属只有 `r sprintf("%.0f", g2_lane$med[g2_lane$family == f1_lo$family])`%，它的 `r nrow(strab_g)` 个属里也有 `r sum(strab_g$share > 0)` 个写过。
+
+结论因此要说得比「科」精确：**同一科里的属可以完全不在一个状态上，所以拿科平均值去描述这批记录会抹掉真实的差异**。四个最大的属（`r paste(sprintf("%s %d", big_marks$genus, big_marks$n), collapse = " / ")`）加起来 `r format(sum(big_marks$n), big.mark = ",")` 个物种，占全表 `r sprintf("%.1f", 100 * sum(big_marks$n) / n_raw)`%，覆盖率从 `r sprintf("%.0f", min(big_marks$share100))`% 到 `r sprintf("%.0f", max(big_marks$share100))`%——最大的属反而最空，这一条与第一节的科级规律方向一致。
+
+要说清的一句：这张图**不能**证明「按属写作」是有意的编辑政策。它只说明可观察到的结果是属级的——原因可能是通才式的写作习惯，也可能是稿件本来就按属分工。下一节给出一个更具体的线索。
+
+```{r}
+#| label: tbl-genus
+#| echo: false
+g2 |>
+  arrange(desc(y), desc(n)) |>
+  transmute(科 = family, 属 = genus, `物种数` = n, `有正文` = written,
+            `覆盖率` = sprintf("%.1f%%", share100)) |>
+  kable(format = "html",
+        caption = "图 2 的原始数字（每个属一行；「有正文」= 该属里有正文的物种数）")
+```
+
+## 四、地图是国家，机制是科
+
+```{r}
+#| label: fig-country
+#| echo: false
+#| fig-cap: "Country coverage follows taxonomic composition rather than national effort: the best-covered bar is a one-family island."
+#| fig-width: 9.4
+#| fig-height: 5.9
+fig3 <- drawer(
+  ggplot(f3_long) +
+  geom_rect(aes(xmin = x - 0.33, xmax = x + 0.33, ymin = bot, ymax = top, fill = cls),
+            colour = PAL$bg, linewidth = 0.7) +
+  geom_hline(yintercept = 0, colour = PAL$mist, linewidth = 0.35) +
+  geom_text(aes(x = x, y = mid, label = sprintf("%.0f", 100 * sh)),
+            data = f3_lab, inherit.aes = FALSE, colour = PAL$bg,
+            family = FAM_D, fontface = "bold",
+            size = mm(TT_TYPE[["annot"]])) +
+  geom_text(aes(x = x, y = 1.03, label = n_lab), data = f3, inherit.aes = FALSE,
+            family = FAM_D, colour = PAL$mist, size = mm(TT_TYPE[["caption"]]),
+            vjust = 0) +
+  scale_fill_manual(values = c(full = PAL$lime, partial = PAL$mist, none = PAL$coral),
+                    breaks = c("full", "partial", "none"),
+                    labels = c("4-6 blocks written", "1-3 blocks", "name only")) +
+  scale_x_continuous(breaks = f3$x, labels = f3$name,
+                     limits = c(0.35, 12.65), expand = c(0, 0)) +
+  scale_y_continuous(breaks = c(0, .5, 1), labels = c("0", "50", "100"),
+                     limits = c(0, 1.09), expand = c(0, 0)) +
+  labs(
+    title    = "Geography is a shadow of taxonomy",
+    subtitle = paste0("Native-range countries with the most records, ",
+                      "stacked by how much of each was written"),
+    x = NULL, y = "share of the country's species records (%)",
+    caption  = tt_source("frogs_and_toads_amphibiaweb.csv", n_pairs,
+      sprintf(paste0("each bar counts species-country pairs, not species: the %s records ",
+                     "spread over %d countries as %s pairs, and a species appears once per ",
+                     "country in its isocc list. Bars are ordered by coverage and the number ",
+                     "above each bar is its species count. Coral and mist are absent text, ",
+                     "not a zero count. isocc is a country-code list, not point localities, ",
+                     "so no map is drawn."),
+              format(n_raw, big.mark = ","), n_country, format(n_pairs, big.mark = ",")))
+  )
+) +
+  theme(axis.text.x = element_text(family = FAM_T, colour = PAL$bone,
+                                   size = TT_TYPE[["axis_text"]],
+                                   angle = 32, hjust = 1))
+fig3
+```
+
+`r flow_f3`
+
+**读数**：`r format(n_species_geo, big.mark = ",")` 个有 `isocc` 的物种摊到 `r n_country` 个国家，共 `r format(n_pairs, big.mark = ",")` 个「物种—国家」对。入图的 12 个国家里，`r f3$name[f3$x == 12]`（`r format(f3$species[f3$x == 12], big.mark = ",")` 个物种记录）覆盖率 `r sprintf("%.0f", f3$share_pct[f3$x == 12])`% 最高，`r f3$name[f3$x == 1]`（`r format(f3$species[f3$x == 1], big.mark = ",")` 个）最低，`r sprintf("%.0f", f3$share_pct[f3$x == 1])`%。
+
+但这根梯度不是「各国努力程度」的梯度，而是科构成的梯度。**国家的覆盖率是科构成的影子**：同一批国家换个科组成，覆盖率就会跟着换。
+
+`r f3$name[f3$x == 12]` 那一端是 `r mg_fam$family[1]`——`r format(f3$species[f3$x == 12], big.mark = ",")` 条记录里 `r mg_fam$n[1]` 条属于这个科。而这个科全表只有 `r format(fam_tab$n[fam_tab$family == "Mantellidae"], big.mark = ",")` 个物种，其中 `r n_mant_only_mg` 个只记在这一个国家，写过 `r sprintf("%.0f", 100 * mg_mant_sh)`%。
+
+`r f3$name[f3$x == 1]` 那一端则主要由 `r vn_fam$family[1]`（`r vn_fam$n[1]` 条，`r sprintf("%.0f", 100 * vn_fam$share[1])`% 写过）与 `r vn_fam$family[2]`（`r vn_fam$n[2]` 条，`r sprintf("%.0f", 100 * vn_fam$share[2])`% 写过）组成——两个物种数不少、正文很少的科。
+
+这张图不能说的：不能读成「某国资料更全」。`isocc` 只是范围代码，没有产地坐标、没有记录数、没有调查强度，物种数多不等于野外多。
+
+```{r}
+#| label: tbl-country
+#| echo: false
+f3 |>
+  arrange(desc(x)) |>
+  transmute(国家 = name, `ISO` = iso, `物种记录数` = species,
+            `4-6 块` = full, `1-3 块` = partial, `只有名字` = none,
+            `覆盖率` = sprintf("%.1f%%", share_pct)) |>
+  kable(format = "html",
+        caption = "图 3 的原始数字（按覆盖率降序；「物种记录数」= 该国的物种—国家对数）")
+```
+
+## 五、是谁写的，以及这份档案的年龄
+
+```{r}
+#| label: tbl-pens
+#| echo: false
+sub_top |>
+  left_join(sub_dom, by = "submittedby") |>
+  mutate(`主笔的科` = sprintf("%s (%d, %.0f%%)", family, n.y, 100 * p)) |>
+  transmute(署名者 = submittedby, `条目数` = n.x,
+            `占已署名条目` = sprintf("%.1f%%", 100 * n.x / n_sub_rows),
+            `主笔的科` = `主笔的科`) |>
+  kable(format = "html",
+        caption = "署名最多的 8 位（submittedby）：一个名字基本等于一个科")
+```
+
+**笔是分科的。** `r format(n_sub_rows, big.mark = ",")` 行有 `submittedby`，而且全部落在写过正文的条目里——有署名却空白的条目 `r n_sub_stub` 行。署名与写作在这份数据里是同一件事。
+
+`r n_sub_people` 个署名里，前 3 位写了 `r format(sum(sub_tab$n[1:3]), big.mark = ",")` 条，占已署名的 `r sprintf("%.1f", 100 * sum(sub_tab$n[1:3]) / n_sub_rows)`%；前 10 位占 `r sprintf("%.1f", 100 * sum(sub_tab$n[1:10]) / n_sub_rows)`%。
+
+而每位主笔的条目几乎集中在同一个科：`r lock1$submittedby` 的 `r lock1$n` 条里，有 `r sprintf("%.0f", 100 * lock1$p)`% 落在 `r lock1$family`。
+
+这解释了第二、三节的两头：Hyperoliidae 覆盖率 `r sprintf("%.0f", 100 * fam_tab$share[fam_tab$family == "Hyperoliidae"])`% 不是因为它被格外重视，而是因为有一位作者整科写过它；Strabomantidae 的 `r sprintf("%.0f", 100 * fam_tab$share[fam_tab$family == "Strabomantidae"])`% 也不是没人管，而是没有人整科接手。这是**分工与相关**的陈述，不是因果推断：数据里没有任何一列写着「为什么」。
+
+```{r}
+#| label: tbl-vintage
+#| echo: false
+tibble(
+  项 = c("submit_date 最早 / 最晚", "submit_date 为空",
+         "edit_date 最早 / 最晚", "edit_date 为空",
+         "两个日期都有", "两个日期都没有",
+         "两者都有时的中位滞后",
+         "被编辑次数最多的三个人"),
+  值 = c(sprintf("%s / %s", format(min(d$submit_date, na.rm = TRUE)), format(submit_stop)),
+         sprintf("%s 行（%.1f%%）", format(n_na_submit, big.mark = ","),
+                 100 * n_na_submit / n_raw),
+         sprintf("%s / %s", format(min(d$edit_date, na.rm = TRUE)),
+                 format(max(d$edit_date, na.rm = TRUE))),
+         sprintf("%s 行（%.1f%%）", format(n_na_edit, big.mark = ","),
+                 100 * n_na_edit / n_raw),
+         sprintf("%s 行", format(n_both_date, big.mark = ",")),
+         sprintf("%s 行（%.1f%%）", format(n_no_date, big.mark = ","),
+                 100 * n_no_date / n_raw),
+         sprintf("%.1f 年（n = %s）", lag_med, format(length(lag_years), big.mark = ",")),
+         sprintf("%s %d / %s %d / %s %d",
+                 edit_tab$editedby[1], edit_tab$n[1],
+                 edit_tab$editedby[2], edit_tab$n[2],
+                 edit_tab$editedby[3], edit_tab$n[3]))
+) |>
+  kable(format = "html",
+        caption = "这份档案自己的时间线（注意：两个日期都为空的那批条目，几乎就是空白条目）")
+```
+
+**档案的年龄不是一条平滑的线。** 条目最后一次被编辑的时间跨 `r format(min(d$edit_date, na.rm = TRUE), "%Y")`–`r format(max(d$edit_date, na.rm = TRUE), "%Y")`。
+
+可两个日期都没有的是 `r format(n_no_date, big.mark = ",")` 行（`r sprintf("%.1f", 100 * n_no_date / n_raw)`%），而这批行几乎就是空白条目本身：`r format(n_none, big.mark = ",")` 行空白条目里只有 `r n_none_dated` 行留下过日期。
+
+所以「记录深度」与「有没有日期」几乎是同一个变量。**不能**把编辑年份当成独立的时间轴去做趋势——那会变成只对 `r sprintf("%.1f", 100 * n_written / n_raw)`% 的样本做时间分析。
+
+对 `r format(n_both_date, big.mark = ",")` 个两个日期都有的条目，从提交到最近一次编辑的中位滞后是 `r sprintf("%.1f", lag_med)` 年——这批条目在档案里躺了很久才被补写。`submit_date` 到 `r format(submit_stop, "%Y")` 只剩 `r n_submit_last` 条，之后的新条目基本只留编辑日期；这是录入口径的变化，不是收录的停止。
+
+## 数据异常（记录，不改数据）
+
+| 现象 | 原始数字 | 处理 |
+| --- | --- | --- |
+| IUCN 状态列全空 | `interntnl_status` `r format(n_raw, big.mark = ",")` 行、`r n_intl` 个非空（该列因此被读成 logical） | 不填补、不拿 `national_status` / `regional_status` 冒充；官方问题第三条明确写成「本快照无此数据」 |
+| 国家级 / 地区级状态是自由文本 | `national_status` `r n_nat` 行、`regional_status` `r n_reg` 行，取值含 `None` / `N/A` / `Unknown` / `California` / `CALIFORNIA` | 不做任何评级汇总；大小写不一致说明是手工录入 |
+| `refs` 大部分是占位符 | `r format(n_refs, big.mark = ",")` 个非空里 `r format(n_refs_ph, big.mark = ",")` 个去掉 `<p>` 后没有任何内容，真正含链接或 DOI 的只有 `r format(n_refs - n_refs_ph, big.mark = ",")` 个 | 不计入记录分级；正文不用 `refs` 判断「被研究过」 |
+| 散文字段是 HTML 片段 | `description` 非空行里 `r sprintf("%.0f", pct_desc_html)`% 含 `<i>` / `<p>` 等标签 | 只算长度与是否为空，不解析、不截断入表；也不剥离（剥离会改变原文） |
+| `clade` 不是一个「支系」列 | `r format(n_clade, big.mark = ",")` 个非空，取值只有 57 种，其中 `r n_clade_rank` 个是表内的**属名**，其余是亚科名，混了分类阶元 | 全页不使用；分类一律用 `family` / `subfamily` / `genus` |
+| `intro_isocc`（引入地）格式残留 | `r n_intro` 个非空里 `r n_intro_bad` 个以逗号开头（如 `",BR"`） | 不参与入图；只记下「分布码拼接」这一事实 |
+| `isocc` 有 `r n_na_isocc` 个物种为空 | `r n_na_isocc` 行 | 图 3 的 n 用「物种—国家」对并写明差额；不把它们当「零分布」 |
+| `lannoo` 是巨型转移文本 | 只有 `r n_lannoo` 行，中位长度 `r format(round(lannoo_med), big.mark = ",")` 字符（最长 60,805） | 完全不进表、不进字长统计，否则整表被这 96 行撑爆 |
+| `amphib_id` 有缺口 | 跨度 `r format(id_span, big.mark = ",")`，实有 `r format(n_raw, big.mark = ",")` 行，缺 `r format(n_id_gap, big.mark = ",")` | 不用 id 推算物种数（缺口含别的目与已撤记录） |
+| 空白条目几乎都没日期 | 两个日期都空 `r format(n_no_date, big.mark = ",")` 行；`r format(n_none, big.mark = ",")` 行空白条目里只有 `r n_none_dated` 行留下过日期 | 正文明确「时间维度只覆盖有日期的子集」；不把空日期读成「很久以前」，也不把这 `r n_none_dated` 行当成有时间信息的条目 |
+| `submittedby` 是自由文本 | 含 "et. al."、机构式合并（`Miguel Vences and Frank Glaw`）、重音字符（`Schiøtz`） | 按原文精确匹配计数，不做人名归并、不做音译 |
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/frogs_and_toads_amphibiaweb.csv`（`r format(n_raw, big.mark = ",")` × `r n_col`，`amphib_id` 唯一，全部 `ordr == "Anura"`） |
+| 覆盖 | `r n_fam` 个科 / `r n_gen` 个属 / `r n_country` 个 `isocc` 国家码 / `r n_sub_people` 个 `submittedby` 署名 |
+| 入图样本 | 图 1：`r flow_f1`；图 2：`r flow_f2`；图 3：`r flow_f3` |
+| 「有正文」的定义 | 六个散文式字段（`description` / `distribution` / `life_history` / `larva` / `trends_and_threats` / `comments`）中至少一个非空；`refs` 与 `relation_to_humans` 不计入（前者多为占位符，后者只有 308 行） |
+| 记录分级 | `full` = 6 个字段里 4–6 个非空（`r format(n_full, big.mark = ",")` 行）· `partial` = 1–3 个（`r format(n_partial, big.mark = ",")` 行）· `none` = 0 个（`r format(n_none, big.mark = ",")` 行） |
+| 图 1 口径 | 按 `family` 聚合，取物种数最多的 14 个科（占 `r sprintf("%.1f", 100 * n_top14 / n_raw)`%）；左右共用一根线性轴，左为「只有名字」、右为「有正文」；标签是原始行数 |
+| 图 2 口径 | 按「科 × 属」聚合，只取图 1 那 14 个科内的 `r n_gen_plotted` 个属；纵轴是同一批科，横轴是该属里有正文的物种占比；点面积 ∝ 属内物种数；点在行内抖动，重叠表示密集而非缺漏 |
+| 图 3 口径 | 把 `isocc` 按逗号拆开，一个物种按其列表在每个国家各计一次（`r format(n_pairs, big.mark = ",")` 对）；取物种记录最多的 12 个国家，按覆盖率排序；每根条是 100% 堆叠的三级记录分级 |
+| 不作为证据的列 | `interntnl_status`（全空）、`clade`（阶元混杂）、`national_status` / `regional_status`（自由文本）、`lannoo`（`r n_lannoo` 行巨型文本）、`refs`（`r sprintf("%.0f", 100 * n_refs_ph / n_refs)`% 是占位符）；这些列都不能用来判断「某个类群被研究了多少」 |
+| 不画的东西 | 不画世界地图（`isocc` 是国家码列表，没有坐标，画地图会把「档案覆盖」误读成「分布密度」）；不画编辑年份趋势（空白条目几乎全无日期，任何时间轴都只覆盖 `r sprintf("%.1f", 100 * n_written / n_raw)`% 的样本）；不做 IUCN 分析（`r n_intl` 行可用）；不按国家排名下结论（国家覆盖差异主要是科构成差异，见第四节） |
+| 数字来源 | 正文所有数字来自本页 prep chunk 的同一份聚合；内联数字一律经 `sprintf` / `format` 定型，避开 knitr 对大数的科学计数法改写 |
+
+```{r}
+#| label: typography-audit
+#| include: false
+audit <- bind_rows(
+  tt_audit(fig1) |> mutate(图 = "图 1", .before = 1),
+  tt_audit(fig2) |> mutate(图 = "图 2", .before = 1),
+  tt_audit(fig3) |> mutate(图 = "图 3", .before = 1)
+)
+n_size_used <- n_distinct(audit$size[!is.na(audit$size)])
+n_family    <- n_distinct(audit$family[!is.na(audit$family)])
+n_off       <- sum(!audit$in_ladder)
+stopifnot(n_size_used <= TT_TYPE_MAX, n_family <= TT_FAMILY_MAX, n_off == 0)
+cat(sprintf("typo-audit: sizes %d/%d, families %d/%d, off-ladder %d\n",
+            n_size_used, TT_TYPE_MAX, n_family, TT_FAMILY_MAX, n_off), file = stderr())
+```
