@@ -1,0 +1,694 @@
+---
+title: "IKEA 沙发与瑞典地名：名字来自最小的那些地方"
+subtitle: "TidyTuesday · 2026-10-27 (Week 43)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 名字取自最小的那些地方，价格却与瑞典无关
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(ggplot2)
+  library(patchwork)
+  library(knitr)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+# ---- 本周色彩（只在本周生效；共享 theme 不含任何色值）----
+# 语义绑定：蓝 = 目录里"值得看一眼"的那一端（最贵、高于中位、最小的地名）；
+# 黄 = 瑞典本土锚点（Ålmhult 与瑞典那一行），全报告只出现两处，面积极小；
+# 黑 = 另一端的锚点与主墨；两档灰只做分栏与"非重点"，不承担语义。
+PAL <- list(
+  bg     = "#F2F2F0",   # 浅灰白：页面与画布底色
+  card   = "#FFFFFF",   # 价签纸：面板与竖列表的底
+  ink    = "#111111",   # 纯黑：主墨 / 最便宜端 / 中位参考线
+  body   = "#5A5A55",   # 正文灰：副标题 / 脚注 / 轴标题
+  rule   = "#C9C9C4",   # 横向细线与基线
+  grid   = "#E3E3DE",   # 面板内细网格
+  blue   = "#0058A3",   # IKEA 蓝：主强调
+  yellow = "#FFDB00",   # IKEA 黄：次强调，极小面积（Ålmhult / 瑞典）
+  grey   = "#7C7C76",   # 中性灰：水域与岛
+  pale   = "#B9B9B4"    # 浅灰：其他要素 / 低于中位的横条
+)
+
+# ---- 本周字体：两族分工（标题一族 + 数字一族）----
+# 价签观感靠"数字全部等宽右对齐"，所以数字用 Consolas、标签用 Segoe UI，
+# 家族数 2 = TT_FAMILY_MAX。首屏 KPI 走页面自身字体栈，不算图内文字。
+FAM_T <- TT_FAMILY[["text"]]
+FAM_N <- TT_FAMILY[["data"]]
+mm <- function(pt) pt / .pt          # element_text 用 pt，geom_text 用 mm
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi,
+                      dev.args = list(bg = PAL$bg))
+
+seat_raw <- read_csv("../data/ikea_seating.csv", show_col_types = FALSE)
+plc      <- read_csv("../data/ikea_places.csv", show_col_types = FALSE)
+```
+
+```{r}
+#| label: prep
+#| echo: false
+n_raw   <- nrow(seat_raw)
+n_col   <- ncol(seat_raw)
+n_mkt   <- n_distinct(seat_raw$country)
+n_item  <- n_distinct(seat_raw$item_no)
+n_cat   <- n_distinct(seat_raw$category)
+n_type  <- n_distinct(seat_raw$product_type)
+n_lang  <- n_distinct(seat_raw$language)
+
+# ---- 一、粒度：一行 = 一个市场 × 一个商品编号 ----
+# 13 组 (country, item_no) 重复：12 组是同一件 SÖDERHAMN（69330512）同时挂在 sofas 与
+# armchairs 两个类目下、价格完全相同；1 组是印度 EKENÄSET（90533174）一个编号出现 5 次、
+# 价格 16,990 ~ 33,990 不等。比价前先折叠成唯一 (country, item_no)，价格取中位数。
+dup_pairs  <- seat_raw |> count(country, item_no) |> filter(n > 1)
+n_dup_grp  <- nrow(dup_pairs)
+n_dup_rows <- sum(dup_pairs$n) - n_dup_grp
+dup_same   <- dup_pairs |> filter(n == 2)
+dup_big    <- dup_pairs |> filter(n > 2)
+dup_multi  <- seat_raw |> filter(country == dup_big$country[1], item_no == dup_big$item_no[1])
+dup_px     <- paste(format(sort(dup_multi$price), big.mark = ",", trim = TRUE), collapse = " / ")
+
+seat <- seat_raw |>
+  summarise(price_usd = median(price_usd), price = median(price),
+            currency = first(currency), name = first(name),
+            category = first(category), .by = c(country, item_no))
+n_uni <- nrow(seat)
+
+icov   <- seat |> count(item_no, name = "nc")
+thr_wide <- 45L
+n_one  <- sum(icov$nc == 1)
+n_le5  <- sum(icov$nc <= 5)
+n_ge10 <- sum(icov$nc >= 10)
+n_ge45 <- sum(icov$nc >= thr_wide)
+n_all  <- sum(icov$nc == n_mkt)
+comp   <- icov$item_no[icov$nc >= 10]
+sel    <- icov$item_no[icov$nc >= thr_wide]
+
+# ---- 二、两张表怎么对上：name 一对多 ----
+n_nm       <- n_distinct(seat_raw$name, na.rm = TRUE)
+rows_na    <- sum(is.na(seat_raw$name))
+names_no  <- setdiff(unique(seat_raw$name[!is.na(seat_raw$name)]), plc$name)
+n_names_no <- length(names_no)
+rows_place <- sum(seat_raw$name %in% plc$name, na.rm = TRUE)
+rows_no    <- n_raw - rows_na - rows_place
+naive_rows <- nrow(inner_join(seat_raw, plc, by = "name", relationship = "many-to-many"))
+n_res      <- sum(unique(seat_raw$name[!is.na(seat_raw$name)]) %in% plc$name)
+
+n_place   <- nrow(plc)
+n_plc_nm  <- n_distinct(plc$name)
+per_name  <- plc |> count(name)
+n_multi   <- sum(per_name$n > 1)
+max_multi <- max(per_name$n)
+n_max_multi <- sum(per_name$n == max_multi)
+n_county  <- n_distinct(plc$county)
+
+# ---- 三、地名分组（一对多的两种口径都算一遍）----
+KEY <- c("hamlet / isolated dwelling", "settlement, village and up",
+         "water and islands", "other feature")
+grp_of <- function(t) case_when(
+  t %in% c("hamlet", "isolated_dwelling") ~ KEY[1],
+  t %in% c("village", "town", "city", "suburb", "neighbourhood", "locality",
+           "municipality", "administrative", "statistical", "residential") ~ KEY[2],
+  t %in% c("lake", "bay", "islet", "island", "wetland") ~ KEY[3],
+  TRUE ~ KEY[4])
+
+alm_lat <- 56.5556; alm_lon <- 14.1433   # Älmhult, Kronobergs län
+plc2 <- plc |>
+  mutate(grp = factor(grp_of(place_type), levels = KEY),
+         d_km = 111.32 * sqrt((latitude - alm_lat)^2 +
+                                (cos(latitude * pi / 180) * (longitude - alm_lon))^2))
+gcnt    <- plc2 |> count(grp) |> mutate(pct = 100 * n / sum(n))
+by_name <- plc2 |> arrange(name, county) |> slice(1, .by = name) |> count(grp)
+cnt  <- setNames(gcnt$n, as.character(gcnt$grp))
+pctg <- setNames(sprintf("%.1f%%", gcnt$pct), as.character(gcnt$grp))
+cntn <- setNames(by_name$n, as.character(by_name$grp))
+pct_place <- gcnt$pct[gcnt$grp == KEY[1]]                        # 按坐标
+pct_name  <- 100 * cntn[KEY[1]] / n_plc_nm                       # 按名字
+pct_gap   <- abs(pct_place - pct_name)
+
+n_nm100  <- n_distinct(plc2$name[plc2$d_km <= 100])
+med_d    <- median(plc2$d_km)
+n_d50    <- sum(plc2$d_km <= 50)
+n_d100   <- sum(plc2$d_km <= 100)
+n_d500   <- sum(plc2$d_km > 500)
+n_town   <- sum(plc$place_type %in% c("town", "city", "suburb"))
+n_north  <- plc2 |> slice_max(latitude, n = 1)
+n_south  <- plc2 |> slice_min(latitude, n = 1)
+n_ntypes <- n_distinct(plc$place_type)
+n_rare   <- sum(table(plc$place_type) <= 2)
+asp      <- 1 / cos(mean(plc2$latitude) * pi / 180)
+
+# ---- 四、同一编号的跨国价差 ----
+rel <- seat |> filter(item_no %in% comp) |> group_by(item_no) |>
+  mutate(med_i = median(price_usd), r = price_usd / med_i) |> ungroup()
+n_rel <- nrow(rel)
+allr  <- rel |> summarise(nc = n_distinct(country), mn = min(price_usd), mx = max(price_usd),
+                          .by = item_no) |> mutate(ratio = mx / mn)
+ratio_med  <- median(allr$ratio)
+ratio_max  <- max(allr$ratio)
+share_ge2  <- mean(allr$ratio >= 2)
+
+dumb <- seat |> filter(item_no %in% sel) |>
+  summarise(nc = n_distinct(country), lo = min(price_usd), hi = max(price_usd),
+            lo_c = country[which.min(price_usd)], hi_c = country[which.max(price_usd)],
+            med = median(price_usd), nm = first(name), .by = item_no) |>
+  mutate(ratio = hi / lo) |> arrange(desc(ratio))
+n_dumb      <- nrow(dumb)
+dumb_row    <- sum(dumb$nc)
+dumb_med    <- median(dumb$ratio)
+dumb_min    <- min(dumb$ratio)
+dumb_max    <- max(dumb$ratio)
+dumb_top    <- dumb |> slice(1)
+dumb_bot    <- dumb |> slice(n())
+hi_tally    <- dumb |> count(hi_c, sort = TRUE)
+lo_tally    <- dumb |> count(lo_c, sort = TRUE)
+
+# ---- 五、市场级价格指数（每个市场在自己的可比商品内相对中位）----
+idx <- rel |> summarise(items = n_distinct(item_no), index = median(r),
+                        .by = country) |> arrange(desc(index))
+n_above <- sum(idx$index > 1)
+n_ge11  <- sum(idx$index >= 1.1)
+n_le09  <- sum(idx$index <= 0.9)
+idx_top <- idx |> slice(1)
+idx_bot <- idx |> slice(n())
+idx_ratio <- idx_top$index / idx_bot$index
+se_idx  <- idx$index[idx$country == "se"]
+min_items <- min(idx$items); max_items <- max(idx$items)
+eur_n   <- nrow(idx |> filter(country %in% (seat |> filter(currency == "EUR") |> distinct(country) |> pull())))
+eur_cty <- seat |> filter(currency == "EUR") |> distinct(country) |> pull()
+eur_idx <- idx |> filter(country %in% eur_cty)
+eur_lo  <- eur_idx |> slice_min(index, n = 1)
+eur_hi  <- eur_idx |> slice_max(index, n = 1)
+eur_item <- seat |> filter(currency == "EUR") |> count(item_no) |> arrange(desc(n)) |> slice(1) |> pull(item_no)
+eur_px  <- seat |> filter(currency == "EUR", item_no == eur_item) |>
+  summarise(n = n(), mn = min(price), mx = max(price))
+
+# ---- 六、派生列的检查：price_usd 是不是纯换算 ----
+fx <- seat_raw |> mutate(imp = price / price_usd) |>
+  summarise(spread = max(imp) / min(imp), .by = currency) |> arrange(desc(spread))
+fx_max <- fx |> slice(1)
+
+# 两个波罗的海市场共用同一份价目表：共有商品里有多少件美元价逐分相同
+pair_ident <- function(a, b) {
+  w <- seat |> filter(country %in% c(a, b)) |>
+    select(country, item_no, price_usd) |> pivot_wider(names_from = country, values_from = price_usd) |>
+    drop_na()
+  tibble(a = a, b = b, n = nrow(w), same = mean(abs(w[[a]] - w[[b]]) < 0.011))
+}
+lv_lt <- pair_ident("lt", "lv")
+ee_lt <- pair_ident("ee", "lt")
+
+# ---- 七、极端值 ----
+hi_row <- seat_raw |> slice_max(price_usd, n = 1)
+lo_row <- seat_raw |> slice_min(price_usd, n = 1)
+loc_max <- seat_raw |> slice_max(price, n = 1)
+```
+
+<div style="display:flex;flex-wrap:wrap;gap:30px;align-items:baseline;margin:24px 0 6px">
+<div><span style="font-size:30px;font-weight:700;color:#0058A3;line-height:1">`r sprintf("%.1f", pct_place)`%</span><br><span style="font-size:12px;color:#111111">的地名坐标是农舍或孤屋（`r cnt[KEY[1]]` / `r n_place`），是城镇的只有 `r n_town` 个</span></div>
+<div><span style="font-size:30px;font-weight:700;color:#111111;line-height:1">`r sprintf("%.2f", idx_ratio)`×</span><br><span style="font-size:12px;color:#111111">最贵与最便宜市场的价格指数差（`r idx_top$country` `r sprintf("%.2f", idx_top$index)` 对 `r idx_bot$country` `r sprintf("%.2f", idx_bot$index)`）</span></div>
+<div><span style="font-size:30px;font-weight:700;color:#0058A3;line-height:1">`r sprintf("%.2f", ratio_med)`×</span><br><span style="font-size:12px;color:#111111">同一件商品跨国美元价差的中位数（`r length(comp)` 个在十个市场以上销售的编号）</span></div>
+</div>
+
+这份数据有趣的地方不在「IKEA 用瑞典地名」这条人尽皆知的事实，而在**这两半几乎不相干**：名字确实来自瑞典，而且来自瑞典最小、最不起眼的那些地点（`r cnt[KEY[1]]` 个坐标是只有几户人的农舍或孤屋）；价格却不来自瑞典——同一件商品在五十个市场之间的美元价差中位数 `r sprintf("%.2f", ratio_med)` 倍，最贵市场是最便宜市场的 `r sprintf("%.2f", idx_ratio)` 倍，而名字的故乡瑞典自己正好落在全市场中位上（`r sprintf("%.3f", se_idx)`）。
+
+## 一、口径：一行是什么
+
+`ikea_seating.csv` 的 `r format(n_raw, big.mark = ",")` 行是 2026-09-28 一天的单点快照：`r n_mkt` 个市场、每个市场网页上的沙发与扶手椅列表。**一行 = 一个市场 × 一个商品编号**，同一件商品在五十个市场里各占一行，所以行数不是件数。
+
+不同编号只有 `r format(n_item, big.mark = ",")` 个。其中 `r n_one` 个只出现在一个市场里，`r format(n_le5, big.mark = ",")` 个不超过五个市场；真正能跨国比价的（十个市场以上）只有 `r length(comp)` 个，能覆盖四十五个市场以上的只有 `r n_ge45` 个。这条覆盖曲线本身就是第一层结论：**全球同款是个少数派**。
+
+`variants` 是「这件商品还有几个变体」的计数（合计 `r format(sum(seat_raw$variants), big.mark = ",")`），不是行数、不是价格、也不是销量。
+
+**两张表怎么对上。** `ikea_places.csv` 的 `r n_place` 行不是 `r n_place` 个名字，而是 `r n_plc_nm` 个名字对应的 `r n_place` 个 OpenStreetMap 地点：`r n_multi` 个名字对到不止一个同名地点，最多的一批各对到五个。
+
+所以不能按 name 把两张表直接 join。那样一张 `r format(n_raw, big.mark = ",")` 行的价目表会变成 `r format(naive_rows, big.mark = ",")` 行（×`r sprintf("%.2f", naive_rows / n_raw)`），「某市场卖几件商品」就被悄悄换成了「某市场卖几件商品 × 几个同名地点」。
+
+`AGEN` 是最典型的例子：两个湖、一个 hamlet、一个 bay、一个 neighbourhood，分散在不同郡。
+
+本页的处置是两条互不干扰的路：
+
+1. **价格图完全不 join 地名表**——价格只在 `price_usd` 上算，与地名无关。
+2. **地名图用 `r n_place` 个坐标本身**，因为「一个名字对应多个地点」正是它要说的事。涉及比例的结论同时给出「按坐标」（`r sprintf("%.1f", pct_place)`%）与「按名字」（每个名字取郡县序第一个，`r sprintf("%.1f", pct_name)`%）两套数，两者差 `r sprintf("%.1f", pct_gap)` 个百分点，结论不依赖选哪套。
+
+```{r}
+#| label: tbl-scope
+#| echo: false
+tibble(
+  项目 = c("ikea_seating.csv", "其中：能对到地名", "其中：name 为空", "其中：name 不是瑞典地名",
+           "ikea_places.csv", "名字数", "按 name 直接 join 的结果",
+           "可跨国比价的编号", "覆盖 ≥45 市场的编号"),
+  值 = c(sprintf("%s 行 × %d 列", format(n_raw, big.mark = ","), n_col),
+         sprintf("%s 行（%.1f%%）", format(rows_place, big.mark = ","), 100 * rows_place / n_raw),
+         sprintf("%s 行（IKEA PS 系列等）", format(rows_na, big.mark = ",")),
+         sprintf("%s 行（%d 个名字）", format(rows_no, big.mark = ","), n_names_no),
+         sprintf("%d 行 × %d 列", n_place, ncol(plc)),
+         sprintf("%d 个名字 → %d 个地点，一对多", n_plc_nm, n_place),
+         sprintf("%s 行（×%.2f，不采用）", format(naive_rows, big.mark = ","), naive_rows / n_raw),
+         sprintf("%d 个（≥10 个市场）", length(comp)),
+         sprintf("%d 个", n_ge45)),
+  说明 = c("一天的单点快照，非均价、非销量",
+           "只有这些行能落到瑞典地图上",
+           "产品名不以瑞典地名命名，不参与地名图",
+           sprintf("如 %s", paste(names_no, collapse = "、")),
+           "坐标数量 > 名字数量",
+           "一个名字可以有多个同名地点",
+           "行数被地名放大，口径被污染",
+           "本页价格部分的全部分母",
+           "本页哑铃图的行数")
+) |>
+  kable(format = "html",
+        caption = "本页的口径：两张表各自的粒度、能不能对上、以及为什么不做行级 join")
+```
+
+## 二、名字取自瑞典最小的那些地方
+
+```{r}
+#| label: flow-1
+#| echo: false
+flow_1 <- tt_flow(n_raw, rows_place,
+                  sprintf("%s 行 name 为空、%s 行属于 %d 个不对应瑞典地名的名字",
+                          format(rows_na, big.mark = ","), format(rows_no, big.mark = ","),
+                          n_names_no))
+```
+
+> `r flow_1`
+
+```{r}
+#| label: fig-places
+#| echo: false
+#| fig-cap: "Two thirds of the coordinates behind IKEA's sofa names are hamlets or isolated dwellings; the median one is 291 km from Älmhult."
+#| fig-width: 9.4
+#| fig-height: 7.4
+MAP_COL   <- setNames(c(PAL$blue, PAL$ink, PAL$grey, PAL$pale), KEY)
+MAP_SHAPE <- setNames(c(16, 15, 17, 1), KEY)
+
+p_map <- ggplot(plc2, aes(longitude, latitude, colour = grp, shape = grp)) +
+  geom_point(size = 1.5, stroke = 0.7) +
+  annotate("point", x = alm_lon, y = alm_lat, shape = 21, size = 3.1,
+           fill = PAL$yellow, colour = PAL$ink, stroke = 0.85) +
+  scale_colour_manual(values = MAP_COL, limits = KEY) +
+  scale_shape_manual(values = MAP_SHAPE, limits = KEY) +
+  scale_x_continuous(breaks = c(12, 14, 16, 18), labels = c("12°E", "14°E", "16°E", "18°E")) +
+  scale_y_continuous(breaks = c(56, 58, 60, 62, 64),
+                     labels = c("56°N", "58°N", "60°N", "62°N", "64°N")) +
+  coord_fixed(ratio = asp) +
+  labs(x = "longitude", y = "latitude") +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM_T) +
+  theme(
+    panel.background = element_rect(fill = PAL$card, colour = NA),
+    panel.grid.major = element_line(colour = PAL$grid, linewidth = 0.3),
+    panel.border     = element_rect(fill = NA, colour = PAL$rule, linewidth = 0.4),
+    axis.text        = element_text(family = FAM_N, colour = PAL$body, size = TT_TYPE[["caption"]]),
+    axis.title.x     = element_text(family = FAM_T, colour = PAL$body,
+                                    size = TT_TYPE[["caption"]], margin = margin(t = 4)),
+    axis.title.y     = element_text(family = FAM_T, colour = PAL$body,
+                                    size = TT_TYPE[["caption"]], margin = margin(r = 4)),
+    legend.position  = "none",
+    plot.margin      = margin(6, 4, 6, 6)
+  )
+
+# 右侧"价签式竖列表"：左标签、右数字，等宽右对齐；四个类型行自带图例符号，
+# 所以整张图不需要 legend()（家族数、图例级别都省下来）。
+card <- tibble(
+  lab = c("place_type", "product rows with a place name", "distinct names",
+          "coordinates in total",
+          KEY[1], KEY[2], KEY[3], KEY[4],
+          "Älmhult, where IKEA started",
+          "counties (län) touched", "names matching more than one place",
+          "median distance from Älmhult", "within 100 km of Älmhult",
+          "beyond 500 km from Älmhult", "towns, cities and suburbs"),
+  val = c("", format(rows_place, big.mark = ","), as.character(n_plc_nm),
+          as.character(n_place),
+          as.character(cnt[KEY[1]]), as.character(cnt[KEY[2]]),
+          as.character(cnt[KEY[3]]), as.character(cnt[KEY[4]]),
+          "", as.character(n_county), as.character(n_multi),
+          sprintf("%.0f km", med_d), as.character(n_d100), as.character(n_d500),
+          as.character(n_town)),
+  sec = c("", "of the seating table", "in the catalogue", "1 to 5 per name",
+          sprintf("%s of %s", pctg[KEY[1]], n_place), pctg[KEY[2]], pctg[KEY[3]], pctg[KEY[4]],
+          "56.56°N 14.14°E", "of 21", sprintf("up to %d for AGEN", max_multi),
+          "straight-line", sprintf("of %d, %d names", n_place, n_nm100),
+          sprintf("of %d", n_place), sprintf("%.1f%% of %d", 100 * n_town / n_place, n_place)),
+  key = c(NA, NA, NA, NA, 1, 2, 3, 4, 5, NA, NA, NA, NA, NA, NA)
+) |>
+  mutate(y     = rev(seq_len(n())),
+         hdr   = lab == "place_type",
+         iskey = !is.na(key),
+         face  = if_else(hdr, "bold", "plain"),
+         vcol  = if_else(iskey, PAL$blue, PAL$ink),
+         vface = if_else(iskey, "bold", "plain"))
+
+p_card <- ggplot(card) +
+  geom_segment(data = filter(card, !hdr), aes(x = 0, xend = 1, y = y - 0.5, yend = y - 0.5),
+               colour = PAL$rule, linewidth = 0.25) +
+  geom_point(data = filter(card, iskey & key <= 4), aes(x = -0.055, y = y),
+             colour = MAP_COL[KEY[filter(card, iskey & key <= 4)$key]],
+             shape  = MAP_SHAPE[KEY[filter(card, iskey & key <= 4)$key]],
+             size = 1.5, stroke = 0.7, inherit.aes = FALSE) +
+  geom_point(data = filter(card, iskey & key == 5), aes(x = -0.055, y = y),
+             shape = 21, size = 2.4, fill = PAL$yellow, colour = PAL$ink, stroke = 0.8,
+             inherit.aes = FALSE) +
+  geom_text(aes(x = 0, y = y, label = lab, fontface = face), hjust = 0, family = FAM_T,
+            size = mm(TT_TYPE[["axis_text"]]), colour = PAL$ink) +
+  geom_text(aes(x = 0.75, y = y, label = val, colour = vcol, fontface = vface),
+            hjust = 1, family = FAM_N, size = mm(TT_TYPE[["axis_text"]])) +
+  geom_text(aes(x = 1, y = y, label = sec), hjust = 1, family = FAM_N,
+            size = mm(TT_TYPE[["caption"]]), colour = PAL$body) +
+  scale_colour_identity() +
+  scale_x_continuous(limits = c(-0.12, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0.5, nrow(card) + 0.5), expand = c(0, 0)) +
+  theme_void() +
+  theme(text            = element_text(family = FAM_T, size = TT_TYPE[["axis_text"]]),
+        plot.background = element_rect(fill = PAL$card, colour = NA))
+
+th_anno <- tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid,
+                   family = FAM_T) +
+  theme(
+    plot.title       = element_text(family = FAM_T, colour = PAL$ink, face = "bold",
+                                    size = TT_TYPE[["title"]], hjust = 0, margin = margin(b = 5)),
+    plot.subtitle    = element_text(family = FAM_T, colour = PAL$body,
+                                    size = TT_TYPE[["subtitle"]], hjust = 0,
+                                    margin = margin(b = 12)),
+    plot.caption     = element_text(family = FAM_T, colour = PAL$body,
+                                    size = TT_TYPE[["caption"]], hjust = 0,
+                                    margin = margin(t = 10), lineheight = 1.35),
+    plot.background  = element_rect(fill = PAL$bg, colour = NA),
+    plot.margin      = margin(12, 12, 8, 12)
+  )
+
+fig1 <- (p_map | p_card) + plot_layout(widths = c(1, 1.9)) +
+  plot_annotation(
+    title    = "The names come from the smallest places in Sweden",
+    subtitle = "Every Swedish coordinate sharing its name with an IKEA sofa or armchair, by longitude and latitude",
+    caption  = tt_source("ikea_places.csv", n_place,
+      sprintf(paste0("%d coordinates carry the %d names the seating catalogue uses. %d names ",
+                     "match more than one OpenStreetMap feature (%d matches five), so a name is not ",
+                     "a point and the counts at right are per coordinate; counting one place per name ",
+                     "instead gives %d of %d (%s) hamlets or isolated dwellings, the same story. Only ",
+                     "%d coordinates are towns, cities or suburbs. Distances are straight-line, not road."),
+              n_place, n_plc_nm, n_multi, max_multi,
+              cntn[KEY[1]], n_plc_nm,
+              sprintf("%.0f%%", 100 * cntn[KEY[1]] / n_plc_nm), n_town)),
+    theme = th_anno
+  )
+fig1
+```
+
+**读数**：`r n_place` 个坐标里 `r cnt[KEY[1]]` 个（`r pctg[KEY[1]]`）是 `hamlet` 或 `isolated_dwelling`——OpenStreetMap 里「几户人家」这一级。真正的城镇（town / city / suburb）只有 `r n_town` 个，占 `r sprintf("%.1f", 100 * n_town / n_place)`%。按名字去重是 `r cntn[KEY[1]]` / `r n_plc_nm`（`r sprintf("%.1f", 100 * cntn[KEY[1]] / n_plc_nm)`%），两种算法都指向「约三分之二」。
+
+地理上它并不围着 Småland 转。与 IKEA 老家 Älmhult 的中位直线距离是 `r sprintf("%.0f", med_d)` 公里。
+
+50 公里内只有 `r n_d50` 个坐标，100 公里内有 `r n_d100` 个、分属 `r n_nm100` 个名字，而 `r n_d500` 个在 500 公里以外。最北是 `r n_north$county` 的 `r n_north$name`（`r sprintf("%.1f", n_north$latitude)`°N，一个 `r n_north$place_type`），最南是 `r n_south$county` 的 `r n_south$name`（`r sprintf("%.1f", n_south$latitude)`°N）。
+
+坐标分布在 `r n_county` 个郡里（瑞典共 21 个）；`r n_ntypes` 种 OSM 要素类型中有 `r n_rare` 种只出现一两次。
+
+**这张图不能得出的**：它不是 IKEA 的命名规则清单，只是「被 OpenStreetMap 收进了同名要素」的那些名字——同名要素越多的名字越容易出现在这里，所以点的疏密同时反映命名偏好与瑞典地名的重复度。分布跟着瑞典的人口与地名密度走（南部密集、北部稀疏），不能读成「IKEA 偏爱南部」。
+
+```{r}
+#| label: tbl-places
+#| echo: false
+plc2 |>
+  summarise(`坐标数` = n(), `占比%` = sprintf("%.1f", 100 * n() / n_place),
+            `名字数` = n_distinct(name), `中位距 Älmhult(km)` = sprintf("%.0f", median(d_km)),
+            `50km 内` = sum(d_km <= 50), .by = grp) |>
+  arrange(desc(`坐标数`)) |>
+  mutate(grp = as.character(grp)) |>
+  kable(format = "html",
+        caption = sprintf("图 1 的原始数字（按 %d 个坐标计；同名地点可以分属不同类型，所以按坐标比按名字更能体现地图上的墨量）", n_place))
+```
+
+## 三、一件商品，价差 1.8 到 4.6 倍
+
+```{r}
+#| label: flow-2
+#| echo: false
+flow_2 <- tt_flow(n_raw, dumb_row,
+                  sprintf("%d 组 (country, item_no) 重复折叠掉 %d 行；%s 个编号覆盖不到 %d 个市场",
+                          n_dup_grp, n_dup_rows, format(n_item - n_ge45, big.mark = ","), thr_wide))
+```
+
+> `r flow_2`
+
+```{r}
+#| label: fig-dumbbell
+#| echo: false
+#| fig-cap: "For the 35 articles sold almost everywhere, the dearest market charges 1.83 to 4.56 times the cheapest."
+#| fig-width: 9.4
+#| fig-height: 8.6
+d2 <- dumb |> arrange(ratio) |> mutate(item_no = factor(item_no, levels = item_no))
+x_hi <- max(d2$hi); ratio_x <- x_hi * 1.42
+n_row <- length(levels(d2$item_no))
+
+fig2 <- ggplot(d2, aes(y = item_no)) +
+  geom_segment(aes(x = lo, xend = hi, yend = item_no), colour = PAL$rule, linewidth = 0.85) +
+  geom_point(aes(x = lo), shape = 15, colour = PAL$ink, size = 1.35) +
+  geom_point(aes(x = hi), shape = 16, colour = PAL$blue, size = 1.7) +
+  geom_text(aes(x = ratio_x, label = sprintf("%.2f×", ratio)), hjust = 1, family = FAM_N,
+            size = mm(TT_TYPE[["axis_text"]]), colour = PAL$ink, fontface = "bold") +
+  annotate("text", x = ratio_x, y = n_row + 0.9, label = "max ÷ min", hjust = 1,
+           family = FAM_T, size = mm(TT_TYPE[["caption"]]), colour = PAL$body) +
+  scale_x_log10(breaks = c(25, 50, 100, 250, 500, 1000, 2500),
+                labels = c("25", "50", "100", "250", "500", "1,000", "2,500"),
+                expand = c(0, 0)) +
+  coord_cartesian(xlim = c(18, x_hi * 1.03), ylim = c(0.4, n_row + 1.15), clip = "off") +
+  labs(
+    title    = sprintf("One article number, %.1f to %.1f different prices", dumb_min, dumb_max),
+    subtitle = sprintf("Cheapest and dearest market for the %d articles sold in at least %d of the %d markets",
+                       n_dumb, thr_wide, n_mkt),
+    x = "price in US dollars (log scale); black square = cheapest market, blue dot = dearest",
+    y = NULL,
+    caption = tt_source("ikea_seating.csv", dumb_row,
+      sprintf(paste0("each row is one item_no and the line spans its cheapest to its dearest ",
+                     "market; the right column is dearest divided by cheapest, median %.2f over ",
+                     "the %d rows. Log scale, so line length is the ratio while absolute levels ",
+                     "are not comparable across rows."),
+              dumb_med, n_dumb))
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM_T) +
+  theme(
+    panel.background   = element_rect(fill = PAL$card, colour = NA),
+    panel.grid.major.y = element_line(colour = PAL$grid, linewidth = 0.35),
+    panel.grid.major.x = element_blank(),
+    axis.text.y        = element_text(family = FAM_N, colour = PAL$ink,
+                                      size = TT_TYPE[["axis_text"]], hjust = 1),
+    axis.text.x        = element_text(family = FAM_N, colour = PAL$body,
+                                      size = TT_TYPE[["caption"]]),
+    axis.title.x       = element_text(family = FAM_T, colour = PAL$body,
+                                      size = TT_TYPE[["caption"]], margin = margin(t = 6)),
+    plot.subtitle      = element_text(family = FAM_T, colour = PAL$body,
+                                      size = TT_TYPE[["subtitle"]], hjust = 0,
+                                      margin = margin(b = 10)),
+    plot.caption       = element_text(family = FAM_T, colour = PAL$body,
+                                      size = TT_TYPE[["caption"]], hjust = 0,
+                                      margin = margin(t = 10), lineheight = 1.35),
+    plot.margin        = margin(14, 64, 10, 12)
+  )
+fig2
+```
+
+**读数**：在「几乎全球都在卖」的 `r n_dumb` 个编号里，最贵市场与最便宜市场的美元价比中位数是 `r sprintf("%.2f", dumb_med)` 倍，区间 `r sprintf("%.2f", dumb_min)` ~ `r sprintf("%.2f", dumb_max)` 倍。
+
+最大的一行是 `r dumb_top$nm` `r dumb_top$item_no`：`r toupper(dumb_top$lo_c)` 的 `r sprintf("%.1f", dumb_top$lo)` 美元对 `r toupper(dumb_top$hi_c)` 的 `r sprintf("%.1f", dumb_top$hi)` 美元。最小的一行是 `r dumb_bot$nm` `r dumb_bot$item_no`，`r sprintf("%.2f", dumb_bot$ratio)` 倍。
+
+两端相当集中：最贵端出现最多的是 `r toupper(hi_tally$hi_c[1])`（`r hi_tally$n[1]` 次），最便宜端是 `r toupper(lo_tally$lo_c[1])`（`r lo_tally$n[1]` 次）；每个编号的两端市场都在下表里。把 `r length(comp)` 个可比编号全部算上，中位 `r sprintf("%.2f", ratio_med)` 倍、`r sprintf("%.1f", 100 * share_ge2)`% 的编号差值在两倍以上：**同一个「全球同款」其实是同款不同价**。
+
+**这张图不能得出的**：`price_usd` 只是本地标价乘一个汇率（见下节「数据异常」），不含税制差异、配送、促销、会员价；这是**一天的单点快照**，不是全年均价，也不能读成「某国更贵」的长期结论。图只画了覆盖最广的 `r n_dumb` 个编号，它们恰好是最标准化、最可能被统一定价的那些。
+
+```{r}
+#| label: tbl-dumbbell
+#| echo: false
+dumb |>
+  transmute(`编号` = item_no, `产品名` = replace_na(nm, "—"),
+            `市场数` = nc,
+            `最低 $` = sprintf("%.2f", lo), `最低市场` = toupper(lo_c),
+            `最高 $` = sprintf("%.2f", hi), `最高市场` = toupper(hi_c),
+            `中位 $` = sprintf("%.2f", med),
+            `倍数` = sprintf("%.2f", ratio)) |>
+  kable(format = "html",
+        caption = sprintf("图 2 的原始数字（按倍数降序；价格单位为 2026-09-28 的美元，n = %d 个编号 × %d 个市场行）", n_dumb, dumb_row))
+```
+
+## 四、谁贵谁便宜：五十个市场的价格指数
+
+```{r}
+#| label: flow-3
+#| echo: false
+flow_3 <- tt_flow(n_raw, n_rel,
+                  sprintf("沿用上一步的折叠；%s 个编号覆盖不到 10 个市场，无法构造可比价",
+                          format(n_item - length(comp), big.mark = ",")))
+```
+
+> `r flow_3`
+
+```{r}
+#| label: fig-index
+#| echo: false
+#| fig-cap: "Mexico pays 1.65 times the cross-market median and Thailand 0.73; Sweden, where the names come from, sits at 0.99."
+#| fig-width: 9.4
+#| fig-height: 8.8
+d3 <- idx |> arrange(index) |> mutate(country = factor(country, levels = country),
+                                      side = if_else(index >= 1, "above", "below"))
+n_c <- length(levels(d3$country))
+
+fig3 <- ggplot(d3, aes(x = index, y = country)) +
+  geom_col(aes(fill = side), width = 0.62) +
+  geom_col(data = filter(d3, country == "se"), aes(x = index, y = country),
+           fill = PAL$yellow, colour = PAL$ink, linewidth = 0.35, width = 0.62,
+           inherit.aes = FALSE) +
+  geom_vline(xintercept = 1, colour = PAL$ink, linewidth = 0.42, linetype = "22") +
+  geom_text(aes(x = 1.80, label = sprintf("%.2f", index)), hjust = 1, family = FAM_N,
+            size = mm(TT_TYPE[["annot"]]), colour = PAL$ink) +
+  annotate("text", x = 1.035, y = 0.28, label = "all-market median", hjust = 0, vjust = 0.5,
+           family = FAM_T, size = mm(TT_TYPE[["caption"]]), colour = PAL$body) +
+  annotate("text", x = 1.80, y = n_c + 0.45, label = "index", hjust = 1, vjust = 0,
+           family = FAM_T, size = mm(TT_TYPE[["caption"]]), colour = PAL$body) +
+  scale_fill_manual(values = c(above = PAL$blue, below = PAL$pale), guide = "none") +
+  scale_x_continuous(limits = c(0, 1.82), breaks = c(0, 0.5, 1.0, 1.5)) +
+  scale_y_discrete(expand = expansion(add = 1.0)) +
+  labs(
+    title    = sprintf("The same catalogue runs %.2f-fold between the dearest and the cheapest market", idx_ratio),
+    subtitle = "Price index per market: median, over each article, of its price divided by that article's cross-market median",
+    x = "price index (1.00 = the article's cross-market median)", y = NULL,
+    caption = tt_source("ikea_seating.csv", n_rel,
+      sprintf(paste0("%d comparable articles, listed in at least 10 of the %d markets, give %s price ",
+                     "observations. Each market sells between %d and %d of them, so the index is not a ",
+                     "fixed basket and is not adjusted for purchasing power. Blue bars sit above the ",
+                     "all-market median, grey below, yellow is Sweden where the names come from. Bars ",
+                     "start at zero, so their length is the index itself."),
+              length(comp), n_mkt, format(n_rel, big.mark = ","), min_items, max_items))) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM_T) +
+  theme(
+    panel.background   = element_rect(fill = PAL$card, colour = NA),
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_line(colour = PAL$grid, linewidth = 0.35),
+    axis.text.y        = element_text(family = FAM_N, colour = PAL$ink, size = TT_TYPE[["annot"]]),
+    axis.text.x        = element_text(family = FAM_N, colour = PAL$body,
+                                      size = TT_TYPE[["caption"]]),
+    axis.title.x       = element_text(family = FAM_T, colour = PAL$body,
+                                      size = TT_TYPE[["caption"]], margin = margin(t = 6)),
+    plot.subtitle      = element_text(family = FAM_T, colour = PAL$body,
+                                      size = TT_TYPE[["subtitle"]], hjust = 0,
+                                      margin = margin(b = 10)),
+    plot.caption       = element_text(family = FAM_T, colour = PAL$body,
+                                      size = TT_TYPE[["caption"]], hjust = 0,
+                                      margin = margin(t = 10), lineheight = 1.35),
+    plot.margin        = margin(14, 20, 10, 12)
+  )
+fig3
+```
+
+**读数**：`r toupper(idx_top$country)` 最高（`r sprintf("%.2f", idx_top$index)`），`r toupper(idx_bot$country)` 最低（`r sprintf("%.2f", idx_bot$index)`），两端差 `r sprintf("%.2f", idx_ratio)` 倍；`r n_above` 个市场在中位以上，其中 `r n_ge11` 个高出 10% 以上，`r n_le09` 个低于中位 10% 以上。**名字的故乡瑞典是 `r sprintf("%.2f", se_idx)`，几乎正好落在全市场中位数上**——这条对照才是本页的主线：命名完全在瑞典，定价几乎与瑞典无关。
+
+货币本身也解释不了它：`r eur_n` 个市场用同一种欧元，指数仍从 `r sprintf("%.2f", eur_lo$index)`（`r toupper(eur_lo$country)`）排到 `r sprintf("%.2f", eur_hi$index)`（`r toupper(eur_hi$country)`）；同一个编号 `r eur_item` 在这 `r eur_n` 个欧元市场里的本地标价从 `r sprintf("%.2f", eur_px$mn)` 到 `r sprintf("%.2f", eur_px$mx)` 欧——**同币不同价**。
+
+**这张图不能得出的**：它不是物价水平排名，是「同一份目录在各市场的相对位置」。每个市场能比的商品数从 `r min_items` 到 `r max_items` 不等，`r toupper(idx_top$country)` 只有 `r idx_top$items` 个可比商品，它的 `r sprintf("%.2f", idx_top$index)` 建立在一个窄得多的样本上。指数也没做购买力平价调整，价格来自网页标价，税前税后、促销与否都可能不同。
+
+```{r}
+#| label: tbl-index
+#| echo: false
+idx |>
+  transmute(`市场` = toupper(country),
+            `价格指数` = sprintf("%.3f", index),
+            `可比商品数` = items,
+            `名义方向` = if_else(index >= 1, "高于中位", "低于中位")) |>
+  kable(format = "html",
+        caption = sprintf("图 3 的原始数字（%d 个市场按指数降序；1.000 = 该市场的可比商品相对各自跨国中位的中位比值）", nrow(idx)))
+```
+
+```{r}
+#| label: typography-audit
+#| include: false
+audit <- bind_rows(
+  tt_audit(p_map)  |> mutate(图 = "图 1 地图", .before = 1),
+  tt_audit(p_card) |> mutate(图 = "图 1 列表", .before = 1),
+  tt_audit(ggplot() + th_anno) |> mutate(图 = "图 1 标题区", .before = 1),
+  tt_audit(fig2)   |> mutate(图 = "图 2", .before = 1),
+  tt_audit(fig3)   |> mutate(图 = "图 3", .before = 1)
+)
+# 家族只数"真的指定了"的：theme_void() 会把 text 的 family 设成空串 ""（= 交给设备默认），
+# 那是"没设"，不是第三套字族，不能计入上限。
+n_size_used <- n_distinct(audit$size[!is.na(audit$size)])
+n_family    <- n_distinct(audit$family[!is.na(audit$family) & nzchar(audit$family)])
+n_off       <- sum(!audit$in_ladder)
+cat(sprintf("families: [%s]\nsizes: [%s]\noff-ladder: [%s]\n",
+            paste(sort(unique(stats::na.omit(audit$family))), collapse = " | "),
+            paste(sort(unique(stats::na.omit(audit$size))), collapse = ", "),
+            paste(unique(audit$element[!audit$in_ladder]), collapse = ", ")),
+    file = stderr())
+stopifnot(n_size_used <= TT_TYPE_MAX, n_family <= TT_FAMILY_MAX, n_off == 0)
+cat(sprintf("typo-audit: sizes %d/%d, families %d/%d, off-ladder %d\n",
+            n_size_used, TT_TYPE_MAX, n_family, TT_FAMILY_MAX, n_off), file = stderr())
+```
+
+## 数据异常（记录，不改数据）
+
+| 现象 | 原始数字 | 处理 |
+| --- | --- | --- |
+| `product_type` 是按国家本地化的自由文本 | `r n_type` 种不同取值（`Fauteuil`、`Divano 3 posti`、`Sofa 3-osobowa`、希伯来语与西里尔字母混排） | 不当类别变量用；跨语言可比的只有 `category`（`r n_cat` 类）、`name`（瑞典语原名）、`item_no` |
+| `language` 同样不可直接分组 | `r n_lang` 种，`en` 占 `r sprintf("%.1f", 100 * mean(seat_raw$language == "en"))`%，其余是各市场本地语 | 只在口径表里提一次，不参与任何图 |
+| 同一 (国家, 编号) 重复 | `r n_dup_grp` 组：`r nrow(dup_same)` 组是 `SÖDERHAMN` `r dup_same$item_no[1]` 同时挂在 sofas 与 armchairs 下、价格完全相同；`r nrow(dup_big)` 组是印度 `EKENÄSET` `r dup_big$item_no[1]` 一个编号出现 `r dup_big$n[1]` 次（`r dup_px` 卢比） | 折叠成唯一 (国家, 编号)，价格取中位数（`r format(n_raw, big.mark = ",")` 行 → `r format(n_uni, big.mark = ",")` 行）；不删行、不改价 |
+| `price_usd` 是纯换算，不是独立测量 | 同一货币内 `price / price_usd` 的极差最大 `r sprintf("%.5f", fx_max$spread)`（`r fx_max$currency`），即两列是严格线性关系 | 跨国只用 `price_usd`；它携带的信息等于「本地价 × 汇率」，汇率来自 fawazahmed0 currency API（CC0，2026-09-28） |
+| 本地货币面额容易误读成哨兵值 | 最高本地价 `r format(loc_max$price, big.mark = ",")`（`r loc_max$currency`，`r toupper(loc_max$country)`，`r loc_max$product_name` `r loc_max$item_no`）= `r sprintf("%.1f", loc_max$price_usd)` 美元；最高美元价 `r sprintf("%.2f", hi_row$price_usd)`（`r toupper(hi_row$country)` `r hi_row$item_no`） | 不是哨兵值，是哥伦比亚比索的面额；不做剔除，但在正文与图注里写清 |
+| 编号覆盖极不均匀 | `r n_one` 个编号只在一个市场销售，`r format(n_le5, big.mark = ",")` 个 ≤5 个市场，只有 `r n_ge45` 个 ≥45 个市场，`r n_all` 个覆盖全部 `r n_mkt` 个市场 | 比价只用 ≥10 个市场的 `r length(comp)` 个编号，哑铃图只用 ≥45 的 `r n_ge45` 个；其余编号只在覆盖曲线里出现 |
+| `name` 不是地名或为空 | `r format(rows_na, big.mark = ",")` 行 `name` 为空（IKEA PS 系列）；`r n_names_no` 个名字不是瑞典地名（`r paste(names_no, collapse = "、")`），`r format(rows_no, big.mark = ",")` 行 | 地名图不画它们；正文把 `r format(n_raw - rows_place, big.mark = ",")` 行（`r sprintf("%.1f", 100 * (n_raw - rows_place) / n_raw)`%）交代为「对不上地名」 |
+| `ikea_places` 一对多 | `r n_plc_nm` 个名字 ↔ `r n_place` 个坐标；`r n_multi` 个名字有多个地点，最多 `r max_multi` 个（`AGEN` 两湖 + hamlet + bay + neighbourhood）；按 name 直接 join 会得到 `r format(naive_rows, big.mark = ",")` 行（×`r sprintf("%.2f", naive_rows / n_raw)`） | 价格图不 join；地名图用全部坐标，比例同时给「按坐标」与「按名字」两套 |
+| `place_type` 长尾 | `r n_ntypes` 种 OSM 类型，`hamlet` `r sum(plc$place_type == "hamlet")`、`isolated_dwelling` `r sum(plc$place_type == "isolated_dwelling")`、`village` `r sum(plc$place_type == "village")`，其余 `r n_ntypes - 3` 类合计 `r n_place - sum(plc$place_type %in% c("hamlet", "isolated_dwelling", "village"))` | 收成四组画图，长尾并进 `other feature`（`r cnt[KEY[4]]` 个），不新增第五个颜色 |
+| 有一个名字对应多个地点、且地理上不在一处 | `r n_max_multi` 个名字各有 `r max_multi` 个同名地点，`AGEN` 分散在 `r n_distinct(plc$county[plc$name == "AGEN"])` 个郡 | 地名图照画全部坐标（这正是要展示的），比例同时给两套口径 |
+| 三个地点没有 `osm_id` | `r paste(plc$name[is.na(plc$osm_id)], collapse = "、")`（手工定位） | 不影响经纬度，照常入图；在方法与口径里注明 |
+| 两个市场共用一份价目表 | `lt` 与 `lv` 在 `r lv_lt$n` 件共有商品里 `r lv_lt$same * 100` 件（`r sprintf("%.1f", 100 * lv_lt$same)`%）美元价逐分相同；`ee` 与 `lt` 是 `r sprintf("%.1f", 100 * ee_lt$same)`% | 不改数；这解释了为什么图 3 里三者的指数几乎重合，也说明「市场」不等于「独立定价单元」 |
+| 同一货币、不同价格 | `r eur_n` 个欧元市场，同一编号本地标价 `r sprintf("%.2f", eur_px$mn)` ~ `r sprintf("%.2f", eur_px$mx)` 欧 | 不做汇率层面的「修正」；正文用这一条否定「差异只是汇率」 |
+| `category` 与产品本身不总一致 | 数据说明自己写着：IKEA 偶尔把商品挂在别的类目下（沙发床出现在 `armchairs`）；`r n_dup_grp - 1` 组重复行正是此例 | 本页不用 `category` 分组比较价格，只用它交代粒度 |
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/ikea_seating.csv`（`r format(n_raw, big.mark = ",")` × `r n_col`，`r n_mkt` 个市场，2026-09-28 单日快照）；`data/ikea_places.csv`（`r n_place` × `r ncol(plc)`，来自 OpenStreetMap / Nominatim，ODbL） |
+| 覆盖 | 市场 `r n_mkt` 个（无 `tw`）、货币 `r n_distinct(seat_raw$currency)` 种、商品编号 `r format(n_item, big.mark = ",")` 个；地名 `r n_plc_nm` 个名字 / `r n_place` 个坐标 / `r n_county` 个郡 |
+| 入图样本 | 图 1：`r n_place` 个坐标；图 2：`r flow_2`；图 3：`r flow_3` |
+| 图 1 口径 | 用 `longitude` / `latitude` 直接画矩形坐标（不加载 sf、不画底图）；`coord_fixed` 按平均纬度做经度压缩；四组按 `place_type` 归并；Älmhult 坐标 56.5556°N 14.1433°E 为参考点，距离为平面近似（等距圆柱），非路网距离 |
+| 图 2 口径 | 只取 `r n_ge45` 个 ≥45 个市场的编号；每个编号取 `min(price_usd)` 与 `max(price_usd)` 两端，对数横轴使线长 = 倍数；不画中位标记（倍数已在右列给出）；`r dumb_row` 个「编号 × 市场」观测 |
+| 图 3 口径 | `r length(comp)` 个 ≥10 个市场的编号；每个市场在「该市场卖得动的这些编号」内算 `price_usd ÷ 该编号的跨国中位`，再取中位；横条从 0 起，不做截断；指数 1.000 = 该编号的中位水平 |
+| 不作为证据的列 | `product_type`（按国家本地化的自由文本）、`language`（同上）、`url`（纯标识）、`variants`（「还有几个变体」的计数，与价格、销量都无关）、`price`（本地货币，跨国不可比，只用来验证 `price_usd` 是换算） |
+| 数字来源 | 正文所有数字来自本页 prep chunk 的同一份聚合；内联数字一律经 `sprintf` / `format` 定型，避开 knitr 对大数的科学计数法改写 |
+| 不画的东西 | 不画 sf 投影地图（2026-09-01 已用，且只有 `r n_place` 个点不需要底图）；不画 100% 堆叠柱（2026-09-29 已用）；不画屋脊（2026-09-29 已用）；不按 `category` 比价（类目本身有归类错误）；不画汇率或时间序列（只有一天）；不做国家层面的人均或 PPP 调整（数据里没有收入与人口） |
