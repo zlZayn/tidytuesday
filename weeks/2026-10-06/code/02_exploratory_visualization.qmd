@@ -1,0 +1,918 @@
+---
+title: "牛油果油真伪：一把 Codex 尺子分开三档"
+subtitle: "TidyTuesday · 2026-10-06 (Week 40)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 一把尺子，两张化验单
+
+<div style="display:flex;align-items:baseline;gap:34px;margin:24px 0 2px;flex-wrap:wrap">
+<div><span style="font-size:31px;font-weight:700;color:#C22B18;line-height:1">90.9%</span><br><span style="font-size:12px;color:#15171A">瓶装油「酸败或掺假」（20 / 22）</span></div>
+<div><span style="font-size:31px;font-weight:700;color:#15171A;line-height:1">2</span><br><span style="font-size:12px;color:#15171A">瓶既纯又没过氧化（共 22 瓶）</span></div>
+<div><span style="font-size:31px;font-weight:700;color:#C22B18;line-height:1">88.9%</span><br><span style="font-size:12px;color:#15171A">标牛油果油的食品批次不合格（48 / 54）</span></div>
+<div><span style="font-size:31px;font-weight:700;color:#15171A;line-height:1">1 / 20</span><br><span style="font-size:12px;color:#15171A">标橄榄油的食品批次不合格</span></div>
+</div>
+
+```{r}
+#| label: headline
+#| echo: false
+# 首屏那段话里的数字也要走 inline R。此块只算这几个头条值（hl_*），
+# 后面 setup / prep-* 会按各自的完整口径重新算一遍所有指标。
+suppressPackageStartupMessages({library(readr); library(dplyr)})
+.hb <- read_csv("../data/avocado_oil_bottles.csv", show_col_types = FALSE)
+.hf <- read_csv("../data/avocado_oil_processed_foods.csv", show_col_types = FALSE)
+
+hl_n_av       <- sum(.hf$oil_type == "avocado")
+hl_n_av_fail  <- sum(.hf$oil_type == "avocado" & !.hf$authentic)
+hl_av_ok      <- hl_n_av - hl_n_av_fail
+hl_av_fail_med <- median(.hf$c16_1_palmitoleic_pct[.hf$oil_type == "avocado" &
+                                                     !.hf$authentic])
+hl_av_ok_min  <- min(.hf$c16_1_palmitoleic_pct[.hf$oil_type == "avocado" & .hf$authentic])
+hl_n_ol       <- sum(.hf$oil_type == "olive")
+hl_ol_rng     <- range(.hf$c16_1_palmitoleic_pct[.hf$oil_type == "olive"])
+hl_n_nonpure  <- sum(.hb$purity_result != "pure")
+hl_c161_ok    <- range(.hb$c16_1_palmitoleic_pct[.hb$purity_result == "pure"])
+hl_c161_bad   <- range(.hb$c16_1_palmitoleic_pct[.hb$purity_result == "adulterated"])
+hl_n_pure_ok  <- sum(.hb$purity_result == "pure")
+```
+
+六年后那 `r hl_n_av_fail` 个不合格的「牛油果油」食品批次，C16:1 棕榈油酸的中位数是 **`r sprintf("%.2f", hl_av_fail_med)`%**，落在橄榄油的位置上。`r hl_n_ol` 个橄榄油批次的区间是 `r sprintf("%.1f", hl_ol_rng[1])`–`r sprintf("%.1f", hl_ol_rng[2])`%，正好把这个数包住。
+
+对照另一头，`r hl_av_ok` 个真正合格的牛油果油批次全部 ≥ `r sprintf("%.2f", hl_av_ok_min)`%。所以这些产品的问题不是「掺了一点别的油」，而是**几乎不含牛油果油**。
+
+瓶装油那边的同一个指标分得更干脆：纯正 `r sprintf("%.1f", hl_c161_ok[1])`–`r sprintf("%.1f", hl_c161_ok[2])`%，掺大豆油 `r sprintf("%.1f", hl_c161_bad[1])`%。`r hl_n_nonpure` 个非纯样本全部命中，`r hl_n_pure_ok` 瓶纯正的**一个都没误伤**。
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(tibble)
+  library(readr)
+  library(stringr)
+  library(ggplot2)
+  library(knitr)
+  library(ggrepel)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+# ---- 本周色彩（只在本周生效；共享 theme 不含任何色值）----
+# 语义绑定：近黑 = 合格 / 规格内，朱红 = 越界 · 掺假 · 不合格，中性灰 = 没有读数或读数未定性。
+# 这四个含义在三张图里不换位，也不与别周同名色复用。
+PAL <- list(
+  bg   = "#FFFFFF",   # 纯白：整页底色，也是每个面板的底（无卡面）
+  ink  = "#15171A",   # 近黑主墨：合格样本、正文、刻度
+  red  = "#C22B18",   # 朱红：唯一强调色
+  gray = "#9AA0A6"    # 中性灰：未检出 / 未测定 / 未定性
+)
+
+# ---- 本周字体决策：两族分工（说人话用 Segoe UI，报数字用 Consolas）----
+# 家族数 2 <= TT_FAMILY_MAX = 2。首屏 KPI 不进图，走页面字体栈。
+FAM  <- TT_FAMILY[["text"]]
+MONO <- TT_FAMILY[["data"]]
+mm   <- function(pt) pt / .pt                      # element_text 用 pt，geom_text 用 mm
+# 同色透明度（不新增色相）。逐元素可向量化：col 与 a 都会按最长者循环补齐，
+# 因为热图矩阵的填充需要「一格一个 alpha」，而 grDevices::adjustcolor 只吃标量。
+acol <- function(col, a = 1) {
+  m <- grDevices::col2rgb(col)
+  n <- max(length(col), length(a))
+  m <- m[, rep_len(seq_len(ncol(m)), n), drop = FALSE]
+  a <- rep_len(a, n)
+  a[!is.finite(a)] <- 1
+  sprintf("#%02X%02X%02X%02X", m[1, ], m[2, ], m[3, ], as.integer(round(255 * a)))
+}
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi,
+                      dev.args = list(bg = PAL$bg))
+
+bottles <- read_csv("../data/avocado_oil_bottles.csv", show_col_types = FALSE)
+foods   <- read_csv("../data/avocado_oil_processed_foods.csv", show_col_types = FALSE)
+
+# ---- 规格尺：Codex Alimentarius 牛油果油参考区间，逐条抄自本周官方 readme ----
+# 只收 readme 明确给出数值区间的指标；不给区间的（total_sterols_mg_kg 等）不入尺，
+# 因为它们没有「合格带」，硬画进规格走廊就成了自定阈值。
+# marker = 短码（热图 13 列装得下的宽度）；name = 平行坐标轴上的全名。
+SPEC <- tribble(
+  ~marker,    ~name,            ~col,                        ~lo,  ~hi,   ~group,
+  "C16:0",    "palmitic",       "c16_0_palmitic_pct",        11.0, 26.0, "fatty acid",
+  "C16:1",    "palmitoleic",    "c16_1_palmitoleic_pct",      4.0, 17.1, "fatty acid",
+  "C18:0",    "stearic",        "c18_0_stearic_pct",          0.1,  1.3, "fatty acid",
+  "C18:1",    "oleic",          "c18_1_oleic_pct",           42.0, 75.0, "fatty acid",
+  "C18:2",    "linoleic",       "c18_2_linoleic_pct",         7.8, 19.0, "fatty acid",
+  "C18:3",    "linolenic",      "c18_3_linolenic_pct",        0.5,  2.1, "fatty acid",
+  "Brassic",  "brassicasterol", "brassicasterol_pct",         0.0,  0.5, "sterol",
+  "Campest",  "campesterol",    "campesterol_pct",            4.0,  8.3, "sterol",
+  "Stigmas",  "stigmasterol",   "stigmasterol_pct",           0.3,  2.0, "sterol",
+  "Clerost",  "clerosterol",    "clerosterol_pct",            1.0,  2.5, "sterol",
+  "bSitost",  "b-sitosterol",   "beta_sitosterol_pct",       79.0, 93.4, "sterol",
+  "d5-Aven",  "d5-avenasterol", "delta5_avenasterol_pct",     2.0,  8.0, "sterol",
+  "d7-Aven",  "d7-avenasterol", "delta7_avenasterol_pct",     0.0,  1.5, "sterol"
+) |>
+  mutate(
+    # 图 1 的轴名用完整一位小数；图 2 的 13 列只有约 0.57 英寸宽，
+    # 用去掉多余 .0 的紧凑写法（79.0–93.4 保一位、42.0–75.0 收成 42–75），
+    # 全部数值精度都不丢，只是省掉尾随的 .0，才排得下那 13 把尺子。
+    spec_lab = sprintf("%.1f\u2013%.1f", lo, hi),
+    spec_lab_short = sprintf("%s\u2013%s",
+                             if_else(lo == round(lo), sprintf("%.0f", lo), sprintf("%.1f", lo)),
+                             if_else(hi == round(hi), sprintf("%.0f", hi), sprintf("%.1f", hi)))
+  )
+
+# 平行坐标只用 8 条有区分力、且在 22 瓶里零缺失的轴（13 条全上会把画布挤成条形码）。
+# stigmasterol 有 2 瓶缺失，进连线会断成两截，所以改用零缺失的 C16:0 与 bSitost 补位；
+# readme 明说是「关键判别指标」的两条（C16:1、C18:3）必须在内。
+PC_MARKERS <- c("C16:0", "C16:1", "C18:0", "C18:1", "C18:2", "C18:3",
+                "Campest", "bSitost")
+```
+
+## 一、先看口径：两张表接不上
+
+```{r}
+#| label: prep-caliber
+#| echo: false
+n_raw_b <- nrow(bottles)                 # 22
+n_raw_f <- nrow(foods)                   # 74
+stopifnot(n_distinct(bottles$sample_code) == n_raw_b,
+          n_distinct(foods$sample_number) == n_raw_f)
+
+# ---- 瓶装油：纯度判定是论文给的离散标签，不是我算的 ----
+purity_n <- bottles |> count(purity_result)
+n_pure   <- purity_n$n[purity_n$purity_result == "pure"]
+n_susp   <- purity_n$n[purity_n$purity_result == "suspected"]
+n_adul   <- purity_n$n[purity_n$purity_result == "adulterated"]
+
+n_ox_true  <- sum(bottles$oxidized %in% TRUE)
+n_ox_false <- sum(bottles$oxidized %in% FALSE)
+n_ox_na    <- sum(is.na(bottles$oxidized))
+n_bad_or_ox <- sum(bottles$oxidized %in% TRUE | bottles$purity_result != "pure")
+pct_bad_or_ox <- 100 * n_bad_or_ox / n_raw_b
+n_clean <- sum(bottles$purity_result == "pure" & bottles$oxidized %in% FALSE)
+clean_codes <- sort(bottles$sample_code[bottles$purity_result == "pure" &
+                                          bottles$oxidized %in% FALSE])
+na_ox_codes <- sort(bottles$sample_code[is.na(bottles$oxidized)])
+# 引言与清洗脚本注释写的是 15 只氧化（外部说法，不是本表聚合），
+# 用来跟列里的 n_ox_true 对账，差额写进「数据异常」表。
+n_intro_ox  <- 15L
+n_intro_bad <- n_intro_ox + n_adul
+pct_intro_bad <- 100 * n_intro_bad / n_raw_b
+
+# ---- 食品批次：authentic 是策展人按 Codex 规则算好的列，直接引用 ----
+n_av   <- sum(foods$oil_type == "avocado")
+n_ol   <- sum(foods$oil_type == "olive")
+n_av_fail <- sum(foods$oil_type == "avocado" & !foods$authentic)
+n_ol_fail <- sum(foods$oil_type == "olive"   & !foods$authentic)
+pct_av_fail <- 100 * n_av_fail / n_av
+pct_ol_fail <- 100 * n_ol_fail / n_ol
+pct_f_fail  <- 100 * sum(!foods$authentic) / n_raw_f
+n_products  <- n_distinct(foods$product_id)
+
+# ---- 两表能不能 join：没有共享主键，也没有品牌列 ----
+shared_marker_cols <- length(intersect(names(bottles), names(foods)))
+n_brand_cols <- sum(str_detect(c(names(bottles), names(foods)),
+                               "(?i)brand|manufacturer|company"))
+n_shared_key <- length(intersect(bottles$sample_code, as.character(foods$sample_number)))
+
+caliber_tbl <- tribble(
+  ~表, ~样本单位, ~行数, ~合格口径, ~不合格口径,
+  "avocado_oil_bottles", "一瓶（2020 年 22 个零售瓶装样本）", n_raw_b,
+  sprintf("purity_result = pure 且 oxidized = FALSE：%d 行", n_clean),
+  sprintf("掺假 %d + 疑似 %d + 已被氧化 %d，占 %d 行",
+          n_adul, n_susp, n_ox_true, n_raw_b - n_clean),
+  "avocado_oil_processed_foods", "一个批次（37 个产品 × 2 批，2026 年）", n_raw_f,
+  sprintf("authentic = TRUE：%d 行", sum(foods$authentic)),
+  sprintf("authentic = FALSE：%d 行（标牛油果油 %d、标橄榄油 %d）",
+          sum(!foods$authentic), n_av_fail, n_ol_fail)
+)
+```
+
+本周是两份相隔六年、彼此独立的研究合订。2020 年的瓶装油有 `r n_raw_b` 瓶；2026 年的加工食品有 `r n_raw_f` 个批次，也就是 `r n_products` 个产品各测两批。口径先钉死三件事。
+
+瓶装油的判定栏 `purity_result` 是论文结论的三档：纯正 `r n_pure` 瓶、疑似 `r n_susp` 瓶、确认掺假 `r n_adul` 瓶，掺假的全部是大豆油。疑似指的是谱落在正常牛油果油范围外、但还没定性。
+
+氧化栏 `oxidized` 是另一条独立的轴：**`r n_ox_true` 瓶在保质期前已氧化，`r n_ox_false` 瓶没有**，另外 `r n_ox_na` 瓶没有读数。这 3 个空值不是缺失，说明书写明「确认是大豆油的样本，氧化状态没有意义」。两条轴交叉，既纯又没过氧化的只有 `r n_clean` 瓶（`r paste(clean_codes, collapse = "、")`）。
+
+食品批次的 `authentic` 是策展人按 Codex 区间加 10% 容差算好的判定列，不是我重算的。标牛油果油的 `r n_av` 个批次里 `r n_av_fail` 个不合格，占 `r sprintf("%.1f", pct_av_fail)`%。标橄榄油的 `r n_ol` 个批次里 `r n_ol_fail` 个不合格，占 `r sprintf("%.1f", pct_ol_fail)`%。全表不合格 `r sprintf("%.1f", pct_f_fail)`%。
+
+**两张表能不能 join：不能。** 列名看似有 `r shared_marker_cols` 个化学指标重叠，但那是同一批检测项目，不是同一个体的两次记录。瓶装油的主键是 `sample_code`（`EV1`…），食品的主键是 `sample_number`（1–74），两者交集 `r n_shared_key` 个。
+
+两份数据也都没有品牌 / 厂商列，匹配 `brand|manufacturer|company` 的列数是 `r n_brand_cols`。所以本页不做任何跨表合并，两表只在「用同一把尺子量同一个指标」这个意义上并排阅读。
+
+```{r}
+#| label: tbl-caliber
+#| echo: false
+caliber_tbl |>
+  kable(format = "html",
+        caption = "本周两张表的口径（行数、合格与不合格的计数口径；两表不可 join，理由见正文）")
+```
+
+```{r}
+#| label: flow-line
+#| echo: false
+flow_b  <- tt_flow(n_raw_b, n_raw_b, "全部 22 瓶都进图，0 行剔除")
+flow_ox <- tt_flow(n_raw_b, n_raw_b - n_ox_na,
+                   sprintf("%d 瓶确认大豆油样本的 oxidized 为 NA（说明书写明此时氧化状态无意义）",
+                           n_ox_na))
+flow_f  <- tt_flow(n_raw_f, n_raw_f, "全部 74 个批次都进图，0 行剔除")
+```
+
+> 入图链：瓶装油 `r flow_b`；氧化率分母 `r flow_ox`；食品批次 `r flow_f`。
+
+## 二、一把尺子量 22 瓶
+
+```{r}
+#| label: prep-pc
+#| echo: false
+# 每轴按自己的 Codex 区间归一：u = (值 - 下限) / (区间宽)。
+# u ∈ [0,1] 就是「在规格内」，于是 8 条轴各自的合格带被压成同一条水平走廊——
+# 这是平行坐标在这里唯一诚实的用法：轴与轴之间比的是「离规格多远」，不是「数值大小」。
+# 区间外用 C1 连续的对数尾展开（u>1 → 1+log(u)；u<0 → −log(1−u)），
+# 否则一个大豆油的 C18:2（54.4%）会把其余 21 瓶压成一条直线。
+pc <- bottles |>
+  select(sample_code, purity_result, oxidized, all_of(SPEC$col)) |>
+  pivot_longer(all_of(SPEC$col), names_to = "col", values_to = "raw") |>
+  inner_join(SPEC, by = "col") |>
+  filter(marker %in% PC_MARKERS) |>
+  mutate(
+    x     = match(marker, PC_MARKERS),
+    u     = (raw - lo) / (hi - lo),
+    g     = if_else(u > 1, 1 + log(u),
+            if_else(u < 0, -log(1 - u), u)),
+    cls   = factor(purity_result, levels = c("pure", "suspected", "adulterated")),
+    # 既纯又没过氧化 = 全周唯一两条真合格线，用主墨加粗单独标出
+    clean = purity_result == "pure" & oxidized %in% FALSE
+  )
+
+stopifnot(!anyNA(pc$g), n_distinct(pc$sample_code) == n_raw_b,
+          all(pc$x %in% seq_along(PC_MARKERS)))
+
+spec_axis_lab <- SPEC |>
+  filter(marker %in% PC_MARKERS) |>
+  mutate(ord = match(marker, PC_MARKERS)) |>
+  arrange(ord) |>
+  mutate(lab = sprintf("%s\n%s\n%s", marker, name, spec_lab)) |>
+  pull(lab)
+
+pc_ylim <- c(min(pc$g, 0) - 0.10, max(pc$g, 1) + 0.10)
+n_pc_axes <- length(PC_MARKERS)
+
+# 末端直标：6 个非纯样本 + 2 条真合格线
+pc_lab <- pc |>
+  filter(x == max(x), cls != "pure" | clean) |>
+  mutate(short = case_when(
+    purity_result == "adulterated" ~ paste0(sample_code, " soy"),
+    purity_result == "suspected"   ~ paste0(sample_code, " suspect"),
+    TRUE                           ~ paste0(sample_code, " clean")
+  ))
+pc_lab_red  <- filter(pc_lab, purity_result == "adulterated")
+pc_lab_ink  <- filter(pc_lab, purity_result != "adulterated")
+
+# 「疑似」那 3 瓶究竟哪里出界、哪里干净——正文直接引用，不手打
+susp <- filter(bottles, purity_result == "suspected")
+susp_c161 <- range(susp$c16_1_palmitoleic_pct)
+susp_c180 <- range(susp$c18_0_stearic_pct)
+susp_c181 <- range(susp$c18_1_oleic_pct)
+susp_c182 <- range(susp$c18_2_linoleic_pct)
+susp_camp <- range(susp$campesterol_pct)
+susp_bsit <- range(susp$beta_sitosterol_pct)
+susp_label <- unique(susp$adulterant)
+```
+
+```{r}
+#| label: fig-corridor
+#| echo: false
+#| fig-cap: "All 22 bottles on one Codex ruler: the sixteen pure samples stay inside the shaded corridor, the three soybean bottles leave it on nine to ten of thirteen markers."
+#| fig-width: 9.4
+#| fig-height: 6.0
+fig1 <- ggplot(pc, aes(x = x, y = g, group = sample_code)) +
+  annotate("rect", xmin = 1, xmax = n_pc_axes, ymin = 0, ymax = 1,
+           fill = acol(PAL$ink, 0.055), colour = NA) +
+  geom_hline(yintercept = c(0, 1), colour = acol(PAL$ink, 0.30),
+             linewidth = 0.25, linetype = "22") +
+  geom_vline(xintercept = seq_along(PC_MARKERS), colour = acol(PAL$ink, 0.18),
+             linewidth = 0.25) +
+  geom_line(data = filter(pc, cls == "pure", !clean),
+            colour = acol(PAL$ink, 0.50), linewidth = 0.28) +
+  geom_line(data = filter(pc, clean), colour = PAL$ink, linewidth = 0.85) +
+  geom_line(data = filter(pc, cls == "suspected"),
+            colour = acol(PAL$gray, 0.95), linewidth = 0.55) +
+  geom_line(data = filter(pc, cls == "adulterated"),
+            colour = PAL$red, linewidth = 0.85) +
+  geom_point(data = filter(pc, cls != "pure"), colour = PAL$gray, size = 1.4) +
+  geom_point(data = filter(pc, cls == "adulterated"), colour = PAL$red, size = 1.4) +
+  geom_text_repel(data = pc_lab_red, aes(x = x, y = g, label = short),
+                  family = MONO, size = mm(TT_TYPE[["caption"]]), colour = PAL$red,
+                  nudge_x = 0.55, direction = "y", hjust = 0, vjust = 0.5,
+                  segment.colour = acol(PAL$red, 0.75), segment.size = 0.22,
+                  min.segment.length = 0, box.padding = 0.16, point.padding = 0.12,
+                  xlim = c(8.55, 9.42), max.overlaps = Inf, seed = 1006) +
+  geom_text_repel(data = pc_lab_ink, aes(x = x, y = g, label = short),
+                  family = MONO, size = mm(TT_TYPE[["caption"]]), colour = PAL$ink,
+                  nudge_x = 0.55, direction = "y", hjust = 0, vjust = 0.5,
+                  segment.colour = acol(PAL$ink, 0.55), segment.size = 0.22,
+                  min.segment.length = 0, box.padding = 0.16, point.padding = 0.12,
+                  xlim = c(8.55, 9.42), max.overlaps = Inf, seed = 1007) +
+  scale_x_continuous(breaks = seq_along(PC_MARKERS), labels = spec_axis_lab,
+                     limits = c(0.94, 9.44), expand = c(0, 0)) +
+  scale_y_continuous(breaks = c(0, 1), labels = c("spec lo", "spec hi"),
+                     limits = pc_ylim, expand = c(0, 0)) +
+  labs(
+    title    = "One codex ruler, and the three soybean bottles fall straight out",
+    subtitle = "Each axis is scaled to its own Codex range-width, so the shaded band is the whole pass zone",
+    x = NULL, y = NULL,
+    caption  = tt_source("avocado_oil_bottles.csv", n_raw_b,
+      paste0("every axis reads: marker code / compound name / Codex lower and upper bound. ",
+             "A value is placed by (value - lower) / (upper - lower); the out-of-range ",
+             "tails are expanded on a log scale only so that one 54 percent linoleic ",
+             "reading does not flatten the other 21 bottles, so the axes compare ",
+             "distance from spec, never raw magnitude across axes. Thin black lines are ",
+             "the 16 pure bottles, the heavy black pair are the only two that are also ",
+             "not oxidised, grey is the three suspected sunflower/safflower samples, ",
+             "vermilion the three confirmed soybean ones. Grey dashed rules are the ",
+             "pass-zone edges, not data."))
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$ink, grid = acol(PAL$ink, 0.06),
+          family = FAM) +
+  theme(
+    panel.background = element_rect(fill = PAL$bg, colour = NA),
+    panel.grid       = element_blank(),
+    axis.title       = element_blank(),
+    axis.text.x      = element_text(family = MONO, colour = PAL$ink,
+                                    size = TT_TYPE[["annot"]], lineheight = 1.32),
+    axis.text.y      = element_text(family = MONO, colour = PAL$ink,
+                                    size = TT_TYPE[["caption"]]),
+    plot.subtitle    = element_text(family = FAM, colour = PAL$ink,
+                                    size = TT_TYPE[["subtitle"]], hjust = 0,
+                                    margin = margin(b = 12)),
+    plot.caption     = element_text(family = FAM, colour = PAL$ink,
+                                    size = TT_TYPE[["caption"]], hjust = 0,
+                                    margin = margin(t = 12), lineheight = 1.35),
+    plot.margin      = margin(16, 20, 12, 16)
+  )
+fig1
+```
+
+**读数**：16 瓶纯正的样本**全部**落在走廊里或紧贴走廊边缘，每瓶越界 0–2 项。3 瓶确认掺大豆油的每一瓶都越界 9–10 项。3 瓶疑似落在 5–7 项。三档之间没有任何重叠，也没有一瓶纯正样本越过 5 项。
+
+所以这条线不是「趋势」而是**分界**。`r n_adul` 瓶大豆油在 C16:1、C18:1、C18:2、C18:3 四条轴上一齐冲出走廊——大豆油的油酸低、亚油酸与亚麻酸高，一眼就能认。
+
+真正值得看的是那 3 瓶「疑似」：它们的**主脂肪酸全部还在规格内**。油酸 `r sprintf("%.1f", susp_c181[1])`–`r sprintf("%.1f", susp_c181[2])`%，规格 42–75。亚油酸 `r sprintf("%.1f", susp_c182[1])`–`r sprintf("%.1f", susp_c182[2])`%，规格 7.8–19。
+
+出界的只有三项。C16:1 从下方跌破，`r sprintf("%.1f", susp_c161[1])`–`r sprintf("%.1f", susp_c161[2])`%，规格下限 4.0。C18:0 从上方超出，`r sprintf("%.1f", susp_c180[1])`–`r sprintf("%.1f", susp_c180[2])`%，规格上限 1.3。
+
+甾醇一侧同样越界：菜油甾醇 `r sprintf("%.1f", susp_camp[1])`–`r sprintf("%.1f", susp_camp[2])`% 双双超上限（规格上限 8.3）。
+
+β-谷甾醇 `r sprintf("%.1f", susp_bsit[1])`–`r sprintf("%.1f", susp_bsit[2])`% 跌破下限（规格下限 79.0）。`adulterant` 栏把这 3 瓶写成 `r susp_label`，正是这个组合指向的油种。
+
+**这就是它们只能判「疑似」而不能判「掺假」的原因：大豆油那三条标志性脂肪酸，它们是干净的。**
+
+不能得出的结论：这张图**不能**说「越界项数 = 掺假程度」。图里只有 22 瓶，且 `purity_result` 是论文的人工判定，越界项数与判定的一致性是我事后对照出来的，不是因果；也不能反过来说「越界 2 项就没事」——`r n_clean` 瓶真合格样本（`r paste(clean_codes, collapse = "、")`）里就有一瓶仍有 2 项越界。
+
+```{r}
+#| label: tbl-pc
+#| echo: false
+bottles |>
+  select(sample_code, grade_labeled, purity_result, oxidized,
+         c16_1_palmitoleic_pct, c18_2_linoleic_pct, c18_3_linolenic_pct,
+         campesterol_pct, beta_sitosterol_pct) |>
+  arrange(match(purity_result, c("adulterated", "suspected", "pure")), sample_code) |>
+  transmute(`样本` = sample_code, `标签等级` = grade_labeled, `判定` = purity_result,
+            `已氧化` = if_else(is.na(oxidized), "无读数", if_else(oxidized, "是", "否")),
+            `C16:1 %` = sprintf("%.1f", c16_1_palmitoleic_pct),
+            `C18:2 %` = sprintf("%.1f", c18_2_linoleic_pct),
+            `C18:3 %` = sprintf("%.1f", c18_3_linolenic_pct),
+            `菜油甾醇 %` = sprintf("%.1f", campesterol_pct),
+            `β-谷甾醇 %` = sprintf("%.1f", beta_sitosterol_pct)) |>
+  kable(format = "html",
+        caption = "图 1 的原始数字（22 瓶全列；「已氧化」的「无读数」= 确认大豆油样本，说明书写明此时氧化状态无意义）")
+```
+
+## 三、六项全中，但硬脂酸误伤四瓶纯正样本
+
+```{r}
+#| label: prep-heat
+#| echo: false
+# 逐格算「离规格多远」，带符号、以区间宽为单位：
+#   高于上限 → +（值−上限）/区间宽；低于下限 → −（值−下限）/区间宽；在区间内 → 0；未检出 → NA。
+# 用区间宽而不是标准差分，是因为 22 瓶里 3 瓶的大豆油数值极端，
+# 标准差会被这 3 瓶自己撑大，越界反而看不出来。
+dev <- bottles |>
+  select(sample_code, purity_result, oxidized, all_of(SPEC$col)) |>
+  pivot_longer(all_of(SPEC$col), names_to = "col", values_to = "raw") |>
+  inner_join(SPEC, by = "col") |>
+  mutate(
+    side = case_when(is.na(raw) ~ NA_character_,
+                     raw > hi   ~ "+",
+                     raw < lo   ~ "-",
+                     TRUE       ~ "0"),
+    dev  = case_when(is.na(raw) ~ NA_real_,
+                     raw > hi   ~ (raw - hi) / (hi - lo),
+                     raw < lo   ~ (raw - lo) / (hi - lo),
+                     TRUE       ~ 0),
+    out  = !is.na(side) & side != "0"
+  )
+
+n_marks_used <- n_distinct(dev$marker)
+stopifnot(n_marks_used == nrow(SPEC), nrow(dev) == n_raw_b * nrow(SPEC))
+
+row_ord <- dev |>
+  summarise(n_out = sum(out), .by = c(sample_code, purity_result)) |>
+  arrange(match(purity_result, c("adulterated", "suspected", "pure")),
+          desc(n_out), sample_code)
+
+n_det_by_sample <- dev |> filter(!is.na(side)) |> summarise(n = n(), .by = sample_code)
+
+per_marker <- dev |>
+  summarise(n_flag = sum(out), n_det = sum(!is.na(side)), .by = c(marker, group)) |>
+  mutate(pct = 100 * n_flag / n_det) |>
+  arrange(desc(n_flag), marker)
+
+# 单项判别力：找出「6 个非纯全中 + 16 瓶纯正零误伤」的指标，并对误伤做记录
+marker_wrong <- dev |>
+  summarise(n_flag = sum(out), .by = c(marker, purity_result)) |>
+  pivot_wider(names_from = purity_result, values_from = n_flag, values_fill = 0)
+perfect_markers <- marker_wrong |>
+  filter(adulterated == n_adul, suspected == n_susp, pure == 0) |>
+  pull(marker)
+# 误伤瓶数：marker_wrong$marker 用的是 SPEC$marker 的短码（C18:0 / Stigmas / Campest），
+# 不是原始列名。用短码取，取不到就直接停——否则 inline R 会静默渲染成空串。
+fp_of <- function(code) {
+  v <- marker_wrong$pure[marker_wrong$marker == code]
+  if (length(v) != 1L) stop("误伤计数取不到：", code)
+  v
+}
+fp_stearic <- fp_of("C18:0")
+fp_stig    <- fp_of("Stigmas")
+fp_camp    <- fp_of("Campest")
+stopifnot(length(perfect_markers) >= 1,
+          fp_stearic > 0, fp_stig > 0, fp_camp > 0)
+
+# 正文与图注里用短码（marker_wrong 按 marker 分组，本身已经是短码）；
+# 正文是中文用「与」，图内文字一律英文用 and。
+perfect_codes <- perfect_markers
+perfect_zh <- paste(perfect_codes, collapse = " 与 ")
+perfect_en <- paste(perfect_codes, collapse = " and ")
+n_perfect  <- length(perfect_codes)
+
+# 两条零误伤指标的端点值（正文直接引用，不手打）
+bs_pure_min <- min(bottles$beta_sitosterol_pct[bottles$purity_result == "pure"])
+bs_adul_max <- max(bottles$beta_sitosterol_pct[bottles$purity_result == "adulterated"])
+c161_pure_rng <- range(bottles$c16_1_palmitoleic_pct[bottles$purity_result == "pure"])
+c161_susp_rng <- range(bottles$c16_1_palmitoleic_pct[bottles$purity_result == "suspected"])
+
+x_first <- 2
+x_last  <- x_first + n_marks_used - 1
+x_strip <- 0.55
+x_cnt   <- x_last + 1.35
+n_rows  <- nrow(row_ord)
+
+hm_y <- function(code) as.numeric(factor(code, levels = rev(row_ord$sample_code)))
+
+hm <- dev |>
+  mutate(
+    y    = hm_y(sample_code),
+    x    = x_first + as.numeric(factor(marker, levels = SPEC$marker)) - 1,
+    a    = case_when(is.na(dev) ~ NA_real_,
+                     abs(dev) <= 0.25 ~ 0.30,
+                     abs(dev) <= 1.00 ~ 0.55,
+                     abs(dev) <= 2.50 ~ 0.78,
+                     TRUE             ~ 1.00),
+    fill = case_when(is.na(side) ~ acol(PAL$gray, 0.20),
+                     side == "0" ~ PAL$bg,
+                     TRUE        ~ acol(PAL$red, coalesce(a, 1))),
+    txt  = case_when(is.na(side) ~ "nd",
+                     side == "0" ~ "",
+                     abs(dev) < 0.10 ~ sprintf("%+.2f", dev),
+                     TRUE        ~ sprintf("%+.1f", dev)),
+    tcol = case_when(is.na(side) ~ PAL$gray,
+                     side == "0" ~ PAL$ink,
+                     a >= 0.55   ~ "#FFFFFF",
+                     TRUE        ~ PAL$red)
+  )
+
+verdict_fill <- c(adulterated = PAL$red, suspected = PAL$gray, pure = PAL$ink)
+cls_of_row <- row_ord |>
+  mutate(y = hm_y(sample_code),
+         fill_col = unname(verdict_fill[purity_result]))
+out_of_sample <- row_ord |> mutate(y = hm_y(sample_code))
+
+# 表头分三层（都在面板内、矩阵上方）：
+#   tier A（最高）分组名 class / fatty acids / sterols / out of spec
+#   tier B  每列自己的 Codex 区间 —— 这就是本周的「规格尺」，13 列各压一把
+#   tier C  面板外的 top 轴 = 指标短码
+# 三层分开放，是因为 13 列的列宽只有约 0.57 英寸，
+# 短码 + 区间挤在同一行会连成一片（第一版就是这么崩的）。
+hm_col_lab <- SPEC$marker
+spec_ruler <- tibble(x = seq(x_first, x_last), y = n_rows + 0.78,
+                     lab = SPEC$spec_lab_short)
+group_band <- tibble(x = c(x_strip, (x_first + x_first + 5) / 2,
+                           (x_first + 6 + x_last) / 2, x_cnt),
+                     y = n_rows + 1.34,
+                     lab = c("class", "fatty acids", "sterols", "out of spec"))
+```
+
+```{r}
+#| label: fig-matrix
+#| echo: false
+#| fig-cap: "Nine to ten of thirteen markers move at once on each soybean bottle, five to seven on each suspected one, and at most two on any pure bottle."
+#| fig-width: 9.4
+#| fig-height: 6.4
+fig2 <- ggplot(hm, aes(x = x, y = y)) +
+  geom_tile(aes(fill = fill), colour = acol(PAL$ink, 0.34), linewidth = 0.5) +
+  geom_text(aes(label = txt, colour = tcol), family = MONO,
+            size = mm(TT_TYPE[["caption"]]), fontface = "bold") +
+  geom_tile(data = cls_of_row, aes(x = x_strip, y = y, fill = fill_col),
+            width = 0.46, height = 1, colour = NA) +
+  geom_text(data = out_of_sample,
+            aes(x = x_cnt, y = y, label = sprintf("%d", n_out)),
+            family = MONO, size = mm(TT_TYPE[["annot"]]), colour = PAL$ink,
+            fontface = "bold") +
+  geom_text(data = spec_ruler, aes(x = x, y = y, label = lab),
+            family = MONO, size = mm(TT_TYPE[["caption"]]),
+            colour = acol(PAL$ink, 0.85), vjust = 0.5, inherit.aes = FALSE) +
+  annotate("segment", x = x_first + 5.5, xend = x_first + 5.5,
+           y = 0.45, yend = n_rows + 1.58, colour = acol(PAL$ink, 0.35),
+           linewidth = 0.4) +
+  geom_text(data = group_band, aes(x = x, y = y, label = lab),
+            family = FAM, size = mm(TT_TYPE[["caption"]]), colour = PAL$ink,
+            fontface = "bold", vjust = 0.5, inherit.aes = FALSE) +
+  scale_fill_identity() +
+  scale_colour_identity() +
+  scale_x_continuous(breaks = seq(x_first, x_last), labels = hm_col_lab,
+                     limits = c(0.15, x_cnt + 0.85), expand = c(0, 0),
+                     position = "top") +
+  scale_y_continuous(breaks = hm_y(row_ord$sample_code),
+                     labels = row_ord$sample_code,
+                     limits = c(0.40, n_rows + 1.80), expand = c(0, 0)) +
+  labs(
+    title    = "Two columns separate every non-pure bottle from every pure one",
+    subtitle = "Signed distance outside the Codex range, in range-widths; empty cell = inside spec, nd = not detected",
+    x = NULL, y = NULL,
+    caption  = tt_source("avocado_oil_bottles.csv", n_raw_b,
+      sprintf(paste0("13 Codex markers x 22 bottles, every cell measured against that ",
+                     "marker's own range: +3.2 means 3.2 range-widths above the upper ",
+                     "bound. nd marks a compound below detection, which is not a violation ",
+                     "and is never counted as zero. The left strip is the paper's purity ",
+                     "verdict, the right column counts violations among the markers ",
+                     "actually detected (10-12 per bottle), so two bottles are not scored ",
+                     "out of the same denominator. Filled cells are shaded by magnitude ",
+                     "only; %s are the only markers that violate on all %d non-pure bottles ",
+                     "and on none of the %d pure ones."),
+              perfect_en, n_adul + n_susp, n_pure))
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$ink, grid = acol(PAL$ink, 0.06),
+          family = FAM) +
+  theme(
+    panel.background = element_rect(fill = PAL$bg, colour = NA),
+    panel.grid       = element_blank(),
+    axis.title       = element_blank(),
+    axis.text.x      = element_text(family = MONO, colour = PAL$ink,
+                                    size = TT_TYPE[["axis_text"]]),
+    axis.text.y      = element_text(family = MONO, colour = PAL$ink,
+                                    size = TT_TYPE[["axis_text"]]),
+    plot.subtitle    = element_text(family = FAM, colour = PAL$ink,
+                                    size = TT_TYPE[["subtitle"]], hjust = 0,
+                                    margin = margin(b = 12)),
+    plot.caption     = element_text(family = FAM, colour = PAL$ink,
+                                    size = TT_TYPE[["caption"]], hjust = 0,
+                                    margin = margin(t = 12), lineheight = 1.35),
+    plot.margin      = margin(16, 20, 12, 16)
+  )
+fig2
+```
+
+**读数**：13 项规格，每瓶实际检出 `r min(n_det_by_sample$n)`–`r max(n_det_by_sample$n)` 项。**只有 `r perfect_zh` 两条指标做到「6 个非纯全中、16 瓶纯正零误伤」。**
+
+C16:1 最干脆。纯正 `r sprintf("%.1f", c161_pure_rng[1])`–`r sprintf("%.1f", c161_pure_rng[2])`%。疑似 `r sprintf("%.1f", c161_susp_rng[1])`–`r sprintf("%.1f", c161_susp_rng[2])`%，掺假那一档只有 0.1%。
+
+三档之间没有任何重叠。β-谷甾醇次之，纯正最低 `r sprintf("%.1f", bs_pure_min)`%、掺假最高 `r sprintf("%.1f", bs_adul_max)`%。
+
+反倒是几条常被当作「掺假指纹」的指标会误伤。C18:0 硬脂酸把 `r fp_stearic` 瓶纯正样本也标成越界，豆甾醇误伤 `r fp_stig` 瓶，菜油甾醇误伤 `r fp_camp` 瓶。
+
+**所以看单一指标会被假阳性带偏，看越界项数才稳。** `r n_adul` 瓶大豆油越界 `r paste(range(row_ord$n_out[row_ord$purity_result == "adulterated"]), collapse = "–")` 项。`r n_pure` 瓶纯正只越界 `r paste(range(row_ord$n_out[row_ord$purity_result == "pure"]), collapse = "–")` 项，两档之间的空隙比任何单一指标都宽。
+
+不能得出的结论：`nd`（未检出）的格子**不是 0**，它只是「低于检出限」，所以每瓶的分母不同。正文只比「几项」不比「占几成」，不能拿 10/13 和 9/11 直接比大小。这也是我没有把 `total_sterols_mg_kg` 放进尺子的原因：readme 没给它区间，硬编一个阈值就成了自定标准。
+
+```{r}
+#| label: tbl-matrix
+#| echo: false
+per_marker |>
+  transmute(`指标` = marker, `族` = group,
+            `检出样本数` = n_det, `越界样本数` = n_flag,
+            `越界比例` = sprintf("%.1f%%", pct)) |>
+  kable(format = "html",
+        caption = "图 2 的列合计（每项在 22 瓶里检出几瓶、越界几瓶；「越界比例」的分母是检出样本数，不是 22）")
+```
+
+## 四、六年后，食品批次落在橄榄油的位置
+
+```{r}
+#| label: prep-strip
+#| echo: false
+# 点条只用一条轴（C16:1），因为它是第三节里零误伤的判别指标；
+# x 取 log 是为了让 0.1–2.2 这一段（合格与不合格首先在那里混着）看得清，
+# 4.0 的合格下限落在 log 轴上一个固定位置。
+set.seed(1006)
+foods_pts <- foods |>
+  mutate(
+    oil_f   = factor(if_else(oil_type == "avocado", "declared avocado oil",
+                             "declared olive oil"),
+                     levels = c("declared avocado oil", "declared olive oil")),
+    cat_f   = factor(category, levels = c("chips", "mayonnaise", "salad_dressing"),
+                     labels = c("chips", "mayonnaise", "salad dressing")),
+    cat_num = as.numeric(cat_f),
+    verdict = if_else(authentic, "authentic", "failed"),
+    y       = cat_num + runif(n(), -0.20, 0.20)
+  )
+
+grp_tbl <- foods_pts |>
+  summarise(n = n(), n_fail = sum(!authentic),
+            med = median(c16_1_palmitoleic_pct),
+            mn  = min(c16_1_palmitoleic_pct),
+            mx  = max(c16_1_palmitoleic_pct),
+            .by = c(oil_f, cat_f, cat_num)) |>
+  arrange(oil_f, cat_num)
+
+AV_FLOOR <- SPEC$lo[SPEC$marker == "C16:1"]      # 4.0，抄自 readme 的 Codex 牛油果油下限
+n_av_ok        <- n_av - n_av_fail
+n_av_fail_below <- sum(foods$c16_1_palmitoleic_pct[foods$oil_type == "avocado" &
+                                                     !foods$authentic] < AV_FLOOR)
+av_ok_min    <- min(foods$c16_1_palmitoleic_pct[foods$oil_type == "avocado" & foods$authentic])
+av_fail_med  <- median(foods$c16_1_palmitoleic_pct[foods$oil_type == "avocado" & !foods$authentic])
+ol_rng       <- range(foods$c16_1_palmitoleic_pct[foods$oil_type == "olive"])
+av_fail_lin  <- median(foods$c18_2_linoleic_pct[foods$oil_type == "avocado" & !foods$authentic])
+chips_av_ok  <- sum(foods$category == "chips" & foods$oil_type == "avocado" & foods$authentic)
+chips_av_n   <- sum(foods$category == "chips" & foods$oil_type == "avocado")
+mayo_av_ok   <- sum(foods$category == "mayonnaise" & foods$oil_type == "avocado" & foods$authentic)
+mayo_av_n    <- sum(foods$category == "mayonnaise" & foods$oil_type == "avocado")
+dress_av_n   <- sum(foods$category == "salad_dressing" & foods$oil_type == "avocado")
+ol_fail_decl <- sprintf("%s", foods$declared_oil[foods$oil_type == "olive" & !foods$authentic])
+```
+
+```{r}
+#| label: fig-strip
+#| echo: false
+#| fig-cap: "Under the avocado-oil label, the failing lots sit exactly where olive oil sits; only six avocado lots clear the 4.0 percent palmitoleic floor."
+#| fig-width: 9.4
+#| fig-height: 5.6
+fig3 <- ggplot(foods_pts, aes(x = c16_1_palmitoleic_pct, y = y)) +
+  geom_segment(data = tibble(oil_f = factor("declared avocado oil",
+                                            levels = levels(foods_pts$oil_f)),
+                             x = AV_FLOOR, xe = AV_FLOOR, y = 0.50, ye = 3.70),
+               aes(x = x, xend = xe, y = y, yend = ye),
+               colour = PAL$red, linewidth = 0.42, linetype = "22",
+               inherit.aes = FALSE) +
+  geom_point(aes(colour = verdict), size = 1.75, alpha = 0.9) +
+  geom_point(data = filter(foods_pts, verdict == "failed"),
+             aes(x = c16_1_palmitoleic_pct, y = y), shape = 1,
+             colour = PAL$red, size = 2.55, stroke = 0.4) +
+  geom_text(data = filter(grp_tbl, n_fail > 0),
+            aes(x = 8.7, y = cat_num, label = sprintf("%d of %d failed", n_fail, n)),
+            family = MONO, size = mm(TT_TYPE[["caption"]]), colour = PAL$red,
+            hjust = 1, vjust = 0.5) +
+  geom_text(data = filter(grp_tbl, n_fail == 0),
+            aes(x = 8.7, y = cat_num, label = sprintf("%d of %d failed", n_fail, n)),
+            family = MONO, size = mm(TT_TYPE[["caption"]]), colour = PAL$ink,
+            hjust = 1, vjust = 0.5) +
+  geom_text(data = tibble(oil_f = factor("declared avocado oil",
+                                         levels = levels(foods_pts$oil_f)),
+                          x = AV_FLOOR * 0.93, y = 3.55,
+                          lab = sprintf("Codex floor %.1f%%", AV_FLOOR)),
+            aes(x = x, y = y, label = lab),
+            family = MONO, size = mm(TT_TYPE[["caption"]]), colour = PAL$red,
+            hjust = 1, vjust = 1, inherit.aes = FALSE) +
+  facet_wrap(~ oil_f, nrow = 1) +
+  scale_colour_manual(values = c(authentic = PAL$ink, failed = PAL$red),
+                      breaks = c("authentic", "failed"),
+                      labels = c("authentic (profile consistent)",
+                                 "failed (profile inconsistent)"),
+                      name = NULL) +
+  scale_x_continuous(trans = "log10", breaks = c(0.1, 0.5, 1, 2, 4, 8),
+                     labels = c("0.1", "0.5", "1", "2", "4", "8"),
+                     limits = c(0.075, 9.6), expand = c(0, 0)) +
+  scale_y_continuous(breaks = 1:3,
+                     labels = c("chips", "mayonnaise", "salad dressing"),
+                     limits = c(0.45, 3.75), expand = c(0, 0)) +
+  labs(
+    title    = "Most 'avocado oil' food lots carry no avocado-oil signal at all",
+    subtitle = "C16:1 palmitoleic acid as percent of total fatty acids, one dot per lot; 74 lots of 37 products, two lots each",
+    x = "C16:1 palmitoleic acid (% of total fatty acids, log scale)", y = NULL,
+    caption  = tt_source("avocado_oil_processed_foods.csv", n_raw_f,
+      sprintf(paste0("each dot is one lot and the ring marks lots the curator's Codex rule ",
+                     "calls inconsistent with the declared oil. All %d authentic avocado ",
+                     "lots sit at or above the %.1f floor (minimum %.1f), while %d of the %d ",
+                     "failing avocado lots sit below it, median %.2f - inside the band the ",
+                     "%d olive lots occupy (%.1f-%.1f). Palmitoleic acid is one of the ",
+                     "markers that rule uses, so this is where the failures sit, not ",
+                     "independent proof of why they were flagged. The dashed floor applies to ",
+                     "the avocado panel only."),
+              n_av_ok, AV_FLOOR, av_ok_min, n_av_fail_below, n_av_fail,
+              av_fail_med, n_ol, ol_rng[1], ol_rng[2]))
+  ) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$ink, grid = acol(PAL$ink, 0.06),
+          family = FAM) +
+  theme(
+    panel.background    = element_rect(fill = PAL$bg, colour = NA),
+    panel.grid.major.y  = element_blank(),
+    panel.grid.major.x  = element_line(colour = acol(PAL$ink, 0.07), linewidth = 0.25),
+    axis.title.x        = element_text(family = FAM, colour = PAL$ink,
+                                       size = TT_TYPE[["axis_title"]]),
+    axis.text.x         = element_text(family = MONO, colour = PAL$ink,
+                                       size = TT_TYPE[["axis_text"]]),
+    axis.text.y         = element_text(family = MONO, colour = PAL$ink,
+                                       size = TT_TYPE[["axis_text"]]),
+    strip.background    = element_blank(),
+    strip.text          = element_text(family = FAM, colour = PAL$ink, hjust = 0,
+                                       size = TT_TYPE[["axis_title"]], face = "bold",
+                                       margin = margin(b = 6)),
+    legend.position     = "top",
+    legend.justification = "left",
+    legend.text         = element_text(family = FAM, colour = PAL$ink,
+                                       size = TT_TYPE[["annot"]]),
+    legend.key.spacing.x = unit(6, "pt"),
+    legend.margin       = margin(b = 6),
+    plot.subtitle       = element_text(family = FAM, colour = PAL$ink,
+                                       size = TT_TYPE[["subtitle"]], hjust = 0,
+                                       margin = margin(b = 12)),
+    plot.caption        = element_text(family = FAM, colour = PAL$ink,
+                                       size = TT_TYPE[["caption"]], hjust = 0,
+                                       margin = margin(t = 12), lineheight = 1.35),
+    plot.margin         = margin(16, 20, 12, 16)
+  )
+fig3
+```
+
+**读数**：`r n_av_ok` 个合格的牛油果油批次**全部**在 `r sprintf("%.1f", AV_FLOOR)` 线上或以上，最低 `r sprintf("%.1f", av_ok_min)`。
+
+另一头，`r n_av_fail` 个不合格批次里有 `r n_av_fail_below` 个跌破这条线，中位数只有 `r sprintf("%.2f", av_fail_med)`。这个数正好落在 `r n_ol` 个橄榄油批次所在的 `r sprintf("%.1f", ol_rng[1])`–`r sprintf("%.1f", ol_rng[2])` 区间里。
+
+分品类看，**薯片最惨**：`r chips_av_n` 个标牛油果油的批次只有 `r chips_av_ok` 个合格。蛋黄酱 `r mayo_av_n` 个里 `r mayo_av_ok` 个合格，沙拉酱 `r dress_av_n` 个则全军覆没。
+
+橄榄油那一侧 `r n_ol` 个批次只有 `r n_ol_fail` 个不合格，是一个标 `r ol_fail_decl` 的薯片批次。
+
+所以本周真正的对照不是「牛油果油 vs 橄榄油」，而是「有监管的品类 vs 没监管的品类」。**同一条 Codex 尺子、同一批实验室、同一个年份**，橄榄油 `r sprintf("%.0f", pct_ol_fail)`% 不合格，牛油果油 `r sprintf("%.0f", pct_av_fail)`% 不合格。
+
+不能得出的结论：**不能**说这些产品「掺了大豆油」。掺大豆油会把 C18:2 亚油酸推到 50% 以上（瓶装油那 3 瓶就是 54–55%），而这里的失败批次 C18:2 中位数只有 `r sprintf("%.1f", av_fail_lin)`%，差着一个量级。数据只能说到「这些批次的指纹与它声明的油种不符」，具体换成了哪一种油、换了几成，这两张表都答不了。
+
+```{r}
+#| label: tbl-strip
+#| echo: false
+grp_tbl |>
+  transmute(`声明油种` = as.character(oil_f), `品类` = as.character(cat_f),
+            `批次数` = n, `不合格` = n_fail,
+            `不合格率` = sprintf("%.1f%%", 100 * n_fail / n),
+            `C16:1 中位数` = sprintf("%.2f", med),
+            `C16:1 区间` = sprintf("%.1f–%.1f", mn, mx)) |>
+  kable(format = "html",
+        caption = "图 3 的原始数字（按声明油种 × 品类；「C16:1 区间」是该组全部批次的最小–最大）")
+```
+
+## 五、氧化和纯度互不相干
+
+```{r}
+#| label: prep-ox
+#| echo: false
+ox_tbl <- bottles |>
+  mutate(ox_lab = case_when(is.na(oxidized) ~ "no reading",
+                            oxidized ~ "oxidised",
+                            TRUE ~ "not oxidised"),
+         ox_lab  = factor(ox_lab, levels = c("oxidised", "not oxidised", "no reading")),
+         pur_lab = factor(purity_result, levels = c("pure", "suspected", "adulterated"))) |>
+  count(pur_lab, ox_lab) |>
+  pivot_wider(names_from = ox_lab, values_from = n, values_fill = 0)
+
+ox_by_class <- bottles |>
+  mutate(ox_lab = case_when(is.na(oxidized) ~ "no reading",
+                            oxidized ~ "oxidised",
+                            TRUE ~ "not oxidised")) |>
+  summarise(n = n(), n_ox = sum(ox_lab == "oxidised"), .by = purity_result) |>
+  mutate(pct = 100 * n_ox / n)
+
+pct_ox_measured <- 100 * n_ox_true / (n_ox_true + n_ox_false)
+
+price_tbl <- bottles |>
+  summarise(n = n(), min = min(cost_per_fl_oz), med = median(cost_per_fl_oz),
+            max = max(cost_per_fl_oz), .by = purity_result) |>
+  arrange(match(purity_result, c("adulterated", "suspected", "pure")))
+
+pr <- bottles$cost_per_fl_oz
+price_all  <- sprintf("%.2f–%.2f", min(pr), max(pr))
+ch_clean   <- bottles$cost_per_fl_oz[bottles$purity_result == "pure" &
+                                       bottles$oxidized %in% FALSE]
+ch_adul    <- bottles$cost_per_fl_oz[bottles$purity_result == "adulterated"]
+n_ox_pure  <- ox_by_class$n_ox[ox_by_class$purity_result == "pure"]
+n_ox_susp  <- ox_by_class$n_ox[ox_by_class$purity_result == "suspected"]
+```
+
+**氧化和纯度几乎不相关。** 在 `r n_raw_b` 瓶里，`r n_ox_true` 瓶在保质期前已氧化。按有读数的 `r n_ox_true + n_ox_false` 瓶算，氧化率是 `r sprintf("%.1f", pct_ox_measured)`%。
+
+纯正组 `r n_ox_pure`/`r n_pure` 氧化。疑似组 `r n_ox_susp`/`r n_susp` 氧化。掺假不掺假，该氧化的还是氧化了，两条轴交叉后只剩 `r n_clean` 瓶过关。
+
+**价格也不区分真伪。** 22 瓶的价格带是 $`r price_all` 每液量盎司，跨度接近 10 倍。
+
+但掺大豆油的 3 瓶全在 $`r sprintf("%.2f", min(ch_adul))`–$`r sprintf("%.2f", max(ch_adul))`。真合格的 2 瓶则落在 $`r sprintf("%.2f", min(ch_clean))`–$`r sprintf("%.2f", max(ch_clean))`，两头挤在同一个低价区间。
+
+最贵的两瓶（$2.23、$2.35，都是 extra virgin）确实纯正，可纯正组从 $`r sprintf("%.2f", min(pr))` 一路铺到 $`r sprintf("%.2f", max(pr))`。换言之：**贵的不一定假，但便宜的两头都有**。
+
+n = 22 且是 2020 年一次采购的快照，这条只能当描述，不能外推成「价格与真伪无关」的结论。
+
+```{r}
+#| label: tbl-ox
+#| echo: false
+ox_tbl |>
+  rename(`判定` = pur_lab) |>
+  kable(format = "html",
+        caption = "氧化 × 纯度交叉表（22 瓶全列；「no reading」= 3 瓶确认大豆油样本，说明书写明此时氧化状态无意义，不是缺失）")
+```
+
+```{r}
+#| label: tbl-price
+#| echo: false
+price_tbl |>
+  transmute(`判定` = purity_result, `瓶数` = n,
+            `最低价` = sprintf("%.2f", min), `中位价` = sprintf("%.2f", med),
+            `最高价` = sprintf("%.2f", max)) |>
+  kable(format = "html",
+        caption = "价格分布（美元 / 液量盎司）按纯度判定分组；三组区间互相覆盖，没有一档单靠价格可分离")
+```
+
+## 数据异常（记录，不改数据）
+
+| 现象 | 原始数字 | 处理 |
+| --- | --- | --- |
+| 「氧化」计数与引言口径不一致 | 引言与清洗脚本注释都写「15 只样本在保质期前氧化」，但列里 `oxidized = TRUE` 是 **`r n_ox_true`** 瓶（`r n_ox_pure` 瓶纯正 + `r n_ox_susp` 瓶疑似）；按引言口径「酸败或掺假」= `r n_intro_bad`/`r n_raw_b`（`r sprintf("%.1f", pct_intro_bad)`%），按列算是 **`r n_bad_or_ox`/`r n_raw_b`（`r sprintf("%.1f", pct_bad_or_ox)`%）** | 不改数。正文与 KPI 一律用列口径并注明「按列重算」，不引用引言那个百分比 |
+| `oxidized` 的 3 个空值不是缺失 | `r paste(na_ox_codes, collapse = "、")` 三瓶确认大豆油样本全为 `NA` | 说明书写明此时氧化状态无意义；氧化率分母取 `r n_ox_true + n_ox_false` 瓶而非 22 瓶，图 1 里这三瓶单独用灰红区分 |
+| `grade_labeled` 是派生列 | 由 `sample_code` 前缀（EV / R / U）反推，不是瓶上另记的字段 | 保留原值但不当作独立证据：`r n_adul` 瓶掺假里有 `r sum(bottles$grade_labeled[bottles$purity_result == "adulterated"] == "extra virgin")` 瓶标着 extra virgin |
+| 食品表 6 列整列为空 | `c6_0_pct`、`c8_0_pct`、`c10_0_pct`、`c20_2_pct`、`c24_1_pct`（读成 logical，全 `NA`）、`c12_0_pct`（double，全 `NA`）—— 74/74 缺失 | 一律不用、也不当 0：既可能是「未检出」也可能是「未检测」，两表之间无法区分 |
+| 食品表甾醇列大面积缺失 | `apparent_beta_sitosterol_pct` 缺 54/74、`c14_0_pct` 缺 53/74、`brassicasterol_pct` 缺 52/74、`c17_0_pct` 缺 47/74 | 不插补。缺得少的列照用，缺过半的列不进任何图，只在表里出现 |
+| `authentic` 是派生列，不是实测 | 由脂肪酸 + 甾醇指纹按 Codex 区间（10% 容差）算出的判定 | 直接引用策展人的列；图 3 的 C16:1 本身就在那条规则里，因此图 3 的读数**不是独立验证**，正文已写明 |
+| 两张表无法 join | 共享主键 0 个；`sample_code`（EV1…）与 `sample_number`（1–74）无交集；两表均无品牌列 | 不合并、不假设「同一品牌」。跨表只做「同一把尺子量同一指标」的并排，不做逐产品追溯 |
+| 产地不是单值 | `product_origin` 有「Mexico, USA, or Spain」（3 瓶）、「Spain or Mexico」（1 瓶）这类多值标签 | 不按产地聚合；产地只在表里出现 |
+| 保质期是字符串 | `expiration_date` 形如 `Oct-21`（按月、无日），且 2 瓶为空 | 不转日期、不参与任何时间轴；本页不用它 |
+| 食品表有混合声明 | `r n_ol` 个橄榄油批次里有 2 个声明「Refined Olive Pomace Oil, Extra Virgin Olive Oil」 | `oil_type` 一律按策展人的 olive；不把油渣油拆出来单算 |
+| 样本量太小，不能外推 | 瓶装 22 瓶；食品 74 个批次 = `r n_products` 个产品，单组最少只有 4 个批次 | 全页不做回归、不做分类器、不报 p 值；所有比较是逐样本 / 逐组计数，结论自带「在这 22 瓶 / 这 74 个批次里」的限定 |
+
+## 方法与口径
+
+| 项 | 值 |
+| --- | --- |
+| 数据 | `data/avocado_oil_bottles.csv`（`r n_raw_b` × `r ncol(bottles)`，`sample_code` 唯一）＋ `data/avocado_oil_processed_foods.csv`（`r n_raw_f` × `r ncol(foods)`，`sample_number` 唯一） |
+| 覆盖 | 瓶装：`r n_distinct(bottles$grade_labeled)` 个标签等级、`r n_distinct(bottles$packaging_type)` 种包装、`r n_distinct(bottles$product_origin)` 种产地写法；食品：`r n_distinct(foods$category)` 个品类 × `r n_distinct(foods$oil_type)` 个油种，`r n_distinct(foods$purchase_location)` 个采购渠道 |
+| 入图样本 | 瓶装油 `r flow_b`；食品批次 `r flow_f`；氧化率分母 `r flow_ox` |
+| 图 1 口径 | 8 条有 Codex 区间的轴，每轴按 `(值−下限)/(上限−下限)` 归一，`[0,1]` 即合格带；区间外做对数尾展开（只为压缩 1 个 54% 读数，不改排序）；灰虚线是合格带边界，不是数据 |
+| 图 2 口径 | 13 条 Codex 区间逐条抄自本周 readme；格值 = 带符号的「离规格多少个区间宽」；`nd` = 未检出，单列一色，不参与越界计数 |
+| 图 3 口径 | 只用 C16:1 一条轴（第三节里唯一零假阳性的指标）；横轴 log10 只为展开 0.1–2.2 这段；红虚线是 Codex 牛油果油下限 4.0，只对「声明牛油果油」面板有约束力 |
+| 不作为证据的列 | `total_sterols_mg_kg` / `total_tocopherols_mg_kg`（readme 不给区间，做不出合格带）；食品表 `c6_0`–`c12_0`、`c20_2`、`c24_1`（整列为空）；`expiration_date`（按月字符串）；`product_origin` 的多值写法（不能当单值产地） |
+| 数字来源 | 正文所有数字来自本页 prep chunk 的同一份聚合；内联数字一律经 `sprintf` / `format` 定型，避开 knitr 对大数的科学计数法改写 |
+| 不画的东西 | 不画价格-真伪散点（n = 22 且三组价格区间重叠，散点会诱导读出一条不存在的斜率）；不画品牌排名（两表都没有品牌列）；不画混淆矩阵 / 分类器（22 瓶 + 6 个非纯样本，任何训练都会过拟合）；不画时间趋势（只有 2020 与 2026 两个点） |
+
+```{r}
+#| label: typography-audit
+#| include: false
+audit <- dplyr::bind_rows(
+  tt_audit(fig1) |> mutate(图 = "图 1", .before = 1),
+  tt_audit(fig2) |> mutate(图 = "图 2", .before = 1),
+  tt_audit(fig3) |> mutate(图 = "图 3", .before = 1)
+)
+n_size_used <- dplyr::n_distinct(audit$size[!is.na(audit$size)])
+n_family    <- dplyr::n_distinct(audit$family[!is.na(audit$family)])
+n_off       <- sum(!audit$in_ladder)
+stopifnot(n_size_used <= TT_TYPE_MAX, n_family <= TT_FAMILY_MAX, n_off == 0)
+cat(sprintf("typo-audit: sizes %d/%d, families %d/%d, off-ladder %d\n",
+            n_size_used, TT_TYPE_MAX, n_family, TT_FAMILY_MAX, n_off), file = stderr())
+cat(sprintf("join-check: shared_marker_cols %d, shared_key %d, brand_cols %d\n",
+            shared_marker_cols, n_shared_key, n_brand_cols), file = stderr())
+```
