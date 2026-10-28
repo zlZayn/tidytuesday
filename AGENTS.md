@@ -25,7 +25,7 @@
 - 部署状态 → [Actions](https://github.com/zlZayn/tidytuesday/actions)（自更新来源，不抄数字）；但**推送后不必等它跑完**，理由见「活跃坑」。
 - 渲染验收（无 CI 覆盖，命令级）：`output/<name>.html` 存在且 > 1 MB；`output/<name>_cleaned.csv` 落盘；HTML 内含 8 个小节（Skeleton → 清洗审计与处理）与「周级整洁汇总」，且无 `there is no package` / `Execution halted` 字样。
 - 本地工具链：R 4.6.0 · Quarto 1.9.37。CI 不装 R，只跑标准库 Python 做同步校验。
-- 02 可视化验收：每周 `output/02_exploratory_visualization.html` 存在、单页 ≤ 6 MiB、单图 ≤ 2 MiB、图内文字英文、正文不含内部笔记与 R 源码；判据与替代方案见 [.agents/notes/2026-09-20-visual-identity-policy.md](.agents/notes/2026-09-20-visual-identity-policy.md)。
+- 02 可视化验收：每周 `output/02_exploratory_visualization.html` 存在、单页 ≤ 6 MiB、单图 ≤ 2 MiB、图内文字英文、正文不含内部笔记与 R 源码、字体内嵌（`data:font/ttf` ≥ 1 且无 `fonts.googleapis`）；判据与替代方案见 [.agents/notes/2026-09-20-visual-identity-policy.md](.agents/notes/2026-09-20-visual-identity-policy.md)。
 
 ## 待办
 
@@ -35,6 +35,7 @@
 - [ ] `01_data_check.qmd` 的 title / subtitle 是通用文案，未按 [weeks/README.md](weeks/README.md) 模板填「<周主题>」与周数。
 - [x] 已定方案（2026-10-02）：兜底交给 pre-commit 钩子（触及 `weeks/` / `assets/site/` / `code/update_site.R` 时自动重跑 `update_site.R` 并入本次提交），CI 改为只校验不生成。这样「忘了跑」在装过钩子的机器上根本不会发生，而钩子未启用的机器（新 clone、网页端编辑、`--no-verify`）由 CI 的 `check_site_index.py` 兜住——它不装 R，秒级完成，取代原 `setup-r` 的 27 s ~ 22 m35 s。已执行（2026-10-02）：`.github/workflows/deploy.yml` 已换成 check-only，实测 9 s。
 - [ ] `01_data_check.qmd` 对空 `data/` 的处置：加 `knitr::knit_exit()` 或改成显式报错（所有周模板需同步）。
+- [ ] 已发布周的「版式签名 / 视觉身份」表格行仍在页面上（2026-08-18 的「本周视觉设计」表、2026-08-25 与 2026-09-01「方法与口径」表里的同类行）：本轮只清了报告开头的引用块，表格行留在附录里兼作配色语义对照，待定是删行还是改写成读者语。方案见 [.agents/notes/2026-10-28-internal-notes-out-of-reports.md](.agents/notes/2026-10-28-internal-notes-out-of-reports.md)。
 - [x] 已核实：`ubuntu-latest` 现在指向 ubuntu-24.04，其语言清单（Bash / Clang / Dash / GNU C++ / GNU Fortran / Julia / Kotlin / Node / Perl / Python / Ruby / Swift）**不含 R**——R 只在 ubuntu-22.04 镜像里。所以只要坚持在 CI 里跑 R 脚本，`r-lib/actions/setup-r@v2` 就删不掉，加缓存也只能省下载时间、省不掉那一步本身的排队。要真正去掉这 22 分钟，只能不在 CI 里跑 R（见下条）。
 
 ## 活跃坑
@@ -59,6 +60,9 @@
 - 生成是确定性的：`update_site.R` 纯 base R、无网络，同一份已提交文件跑出的 `index.html` 逐字节一致。本地钩子生成、CI 校验，两者看的是同一个结果。
 - 唯一的非确定性是 `generated` 日期（`Sys.Date()`）：CI runner 为 UTC，本地为 UTC+8，所以**在本地 00:00–07:59 推送时两边会差一天**。这不是 bug 也无需处理（CI 已不生成、只校验周列表，不比对日期），但排查「日期看着不对」时先想到它。
 - 内部笔记（自检表、判定行、变更记录）只写渲染日志（`cat(..., file = stderr())`）与源码注释，不得进 HTML；改完 grep 产物确认。
+- **在路径含点目录（如 `.agents/worktrees/<id>/`）的 checkout 里渲染，Quarto 会静默退出 project 模式**：`_quarto.yml` 的 `output-dir: ../output` 不生效，HTML 落到 `code/` 而不是 `output/`，**退出码仍是 0**；`quarto render`（无参数的项目级渲染）则直接不产文件。判定：`quarto inspect project` 在该目录报 project not found。绕法二选一——渲染后把 `code/*.html` 移进 `output/`（`self-contained: true`，移动不改内容），或先 `cmd /c mklink /J C:\q_repo <checkout>` 建一条无点路径的 junction 再渲染（用完 `cmd /c rmdir C:\q_repo`，别用 `Remove-Item -Recurse`）。主检出 `D:\RDirectory\tidytuesday` 路径无点目录，不受影响。
+- **Google Fonts 取不到时，自包含 HTML 会静默退化成外链**：`self-contained: true` 把 `Source Sans Pro` 等内嵌为 `data:font/ttf`，但渲染时若连不上 `fonts.googleapis.com`（本机 `verge-mihomo` 在 127.0.0.1:7897 监听而系统代理 `ProxyEnable=0`），Quarto 只报一行 `HostCannotConnect` 警告就改用 `@import` 指向外网，产物从 3.53 MiB 掉到 2.84 MiB，退出码照旧 0——单文件 HTML 从此依赖网络，违反「自带样式与字体」。做法：渲染前 `$env:HTTPS_PROXY='http://127.0.0.1:7897'`（同时设 `HTTP_PROXY`），渲染后核 `data:font/ttf` ≥ 1 且 `fonts%2Egoogleapis` = 0。
+- 已发布周重渲染会改写「发布于」日期（YAML `date: today`）。要让旧周的日期保持不变，先把该周 `date:` 冻结为原发布日期再渲染；`2026-08-25` / `09-01` / `09-08` / `09-15` 已冻结为 `2026-09-20`，`09-29` 为 `2026-10-01`。
 - 改 `assets/tt_theme.R` 属共享依赖变更：必须广播各周作者并重渲染受影响周（含 `TT_TYPE` 字号阶梯与重量预算常量）。
 
 ## 文档地图
