@@ -95,6 +95,7 @@ execute:
 | 数据读取 | 手写 qmd 用相对路径 `../data/<dataset>.csv`（相对 `weeks/<date>/code/`）；参数化模板 `01_data_check.qmd` 例外——用 `assets/` 根标记定位项目根后拼 `weeks/<week>/data/` |
 | 图表 | 每图配 cell 选项 `#&#124; label: fig-*`、`#&#124; fig-cap:`，可交叉引用 |
 | 语言 | **图内文字一律英文**（原因见 [../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)）；正文 / 表格注释可为中文 |
+| `date` | 新周用 `date: today`；已发布周的重渲染要先把 `date:` 冻结为该周原发布日期，否则「发布于」会被改写成构建当天 |
 
 ## 自动部署（Vercel）
 
