@@ -2,7 +2,7 @@
 title: "乡村音乐词曲作者生态：榜单长尾与歌词词频"
 subtitle: "TidyTuesday · 2026-08-25 · 484 首乡村电台 Top 30 歌曲的作者、制作人与歌词"
 author: "zlZayn"
-date: today
+date: "2026-09-20"
 format:
   html:
     css: ../../../assets/styles.css
@@ -68,8 +68,6 @@ aw <- read_csv("../data/top_all_writers.csv", show_col_types = FALSE)
 pw <- read_csv("../data/top_primary_writers.csv", show_col_types = FALSE)
 pp <- read_csv("../data/top_producers.csv", show_col_types = FALSE)
 ```
-
-> **本周视觉身份**：**深酒红场 `#7A2E3C`** ＋ **羊皮纸 `#F0E2CE`** ＋ **黄铜 `#C9A227`** ＋ **石板 `#5A6270`**；图表家族 = **双对数秩–规模曲线** ＋ **文本词频条形**；版式签名 = **曲线末梢直接贴标签（无图例）＋ 大面积留白 ＋ 只留一条基线**。颜色在这里不是装饰：石板 `#5A6270` 在这张酒红场上的对比度只有 1.3:1（实测），所以它只做线条、基线与网格，文字一律走羊皮纸或黄铜。
 
 ```{r}
 #| label: facts

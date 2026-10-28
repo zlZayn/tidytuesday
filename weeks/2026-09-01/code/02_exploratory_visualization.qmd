@@ -2,7 +2,7 @@
 title: "世界城堡 探索性可视化"
 subtitle: "TidyTuesday · 2026-09-01 (Week 36)"
 author: "zlZayn"
-date: today
+date: "2026-09-20"
 format:
   html:
     css: ../../../assets/styles.css
@@ -176,10 +176,6 @@ note_tl  <- sprintf("Before 500 BC: %d of %s dated rows (%.1f%%) spread over 2,5
 note_pv  <- sprintf("Pearson r(year, log10 pageviews) = %+.3f\n%d bins with n \u2265 20 \u00b7 %s sites in cells",
                     rho_year_pv, nrow(pv_med), format(nrow(pv), big.mark = ","))
 ```
-
-> 本周的纸面与颜料：**赭黄沙纸 `#E8CFA3`** 打底，只上四条土色 —— 深褐 `#46331F`、砖橙 `#C1663A`、灰绿 `#6E7F6A`、陶土 `#7C6A52`；图表家族 = **点阵世界地图 ＋ 时间轴堆叠面积**；版式签名 = **地图去轴去边框 ＋ patchwork 上下拼接（地图上、时间轴下）＋ 面板内嵌小注**。
->
-> 赭黄不是装饰：这是一份遗址清单，纸面就该像一张野外记录纸。四类遗址正好用掉四条颜料，其中陶土 `#7C6A52` 是给 `ruin` 补的第 4 色 —— 它与另外三色的 CIEDE2000 最小色差 `r sprintf("%.1f", de_ruin)`，是本色系候选里分离度最高的一个。
 
 ## 数据范围与四个会影响读图的口径
 
