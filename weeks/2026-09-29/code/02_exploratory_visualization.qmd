@@ -2,7 +2,7 @@
 title: "全球城市中心的医疗记录 探索性可视化"
 subtitle: "TidyTuesday · 2026-09-29 (Week 39)"
 author: "zlZayn"
-date: today
+date: "2026-10-01"
 format:
   html:
     css: ../../../assets/styles.css
@@ -26,8 +26,6 @@ execute:
 ---
 
 # 记录，不是设施
-
-> 本周视觉身份（八周互不相同，不写入共享 theme）：**薰衣草银场 `#EDE7F2` ＋ 更亮的卡面 `#F8F6FB`**（panel 用卡面、底色露在四周）＋ **深紫墨 `#2A2140` / 正文灰紫 `#5C5470`** ＋ **洋红 `#B23A5B` = 医院 · 青绿 `#1F7A6F` = 药房 · 中紫 `#6B5B95` = 两类都有记录 · 幽灵灰紫 `#CFC8DC` = 没有记录**；图表家族 = **互斥记录类 100% 堆叠柱（顶部「无记录」段走幽灵灰，并画一条虚线记录线）＋ 对数密度屋脊（每组中位数直标）＋ 按人口十分位的双序列中位数趋势（两线之间着色带）**；版式签名 = **全报告图内只用一族 Segoe UI，层次由字号与字重承担，不靠等宽字体做数据／正文的对位＋ 图内不放等宽口径条，改为在面板角上钉一枚三行「口径角标」**。字号仍走共享排版阶梯（16 / 13 / 11 / 9.5 / 8.5 / 7.5 pt），不新增字号。
 
 <div style="display:flex;align-items:baseline;gap:14px;margin:22px 0 2px">
 <span style="font-size:30px;font-weight:700;color:#B23A5B;line-height:1">54.6%</span>
