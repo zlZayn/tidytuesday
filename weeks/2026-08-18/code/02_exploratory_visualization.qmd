@@ -2,7 +2,7 @@
 title: "IELTS 考生构成与成绩 探索性可视化"
 subtitle: "TidyTuesday · 2026-08-18 (Week 33)"
 author: "zlZayn"
-date: today
+date: "2026-09-20"
 format:
   html:
     css: ../../../assets/styles.css
@@ -122,14 +122,7 @@ perf_lang <- read_csv(file.path(dpath, "performance_by_first_language.csv"), sho
 perf_nat  <- read_csv(file.path(dpath, "performance_by_nationality.csv"), show_col_types = FALSE)
 ```
 
-| 本周视觉设计 | |
-| --- | --- |
-| 底色 / 墨 | `#CFE3F5` 冷蓝考卷纸 / `#1F3A5F` |
-| 类别色 | `#A63A2E` 砖红 = Academic；`#D9A441` 芥黄 = General Training（全篇同色同标签） |
-| 辅助色 | `#41628A` 正文蓝灰（轴文字、参考线）、`#B9D2EA` 方格边 |
-| 图表家族 | 哑铃（斜率连线）＋ 分箱构成热图 ＋ 偏差棒棒糖 |
-| 版式签名 | 无网格纸面（只留基线）· 图例竖排右侧 · 衬线标题 ＋ 无衬线轴与图内数字 · 标题到图注逐级变小 |
-| 字体 | 标题、副标题与图注用 `r TT_SERIF`；轴、图例与图内数字用 `r TT_FONT` |
+本页所有图只用两种类别色，含义固定、不换位：**砖红 = Academic**、**芥黄 = General Training**。同一场考试在文字、表头与图例里保持同一个名字与同一个颜色，跨图可直接对照。
 
 ## 口径：`percent` 是组内构成，不是人数
 

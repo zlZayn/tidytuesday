@@ -404,8 +404,7 @@ cat(sprintf("[typeset] %d sizes (%s) | %d families (%s) | off-ladder %d", length
 | 入图（时间轴） | `r format(n_dated, big.mark = ",")` 行；`r tt_flow(n_raw, n_dated, sprintf("%s 行既无 year 也无 century", format(n_undated, big.mark = ",")))` |
 | 入图（关注度热图） | `r format(nrow(pv), big.mark = ",")` 行；`r tt_flow(n_raw, nrow(pv), sprintf("%s 行无年代", format(n_undated, big.mark = ",")), sprintf("%d 行有年代但 pageviews = 0，取不了 log10", n_pv_drop))` |
 | 口径差（必须分清） | **原始 `r format(n_raw, big.mark = ",")`** = castle `r cat_n$n[cat_n$category == "castle"]` + fortress `r cat_n$n[cat_n$category == "fortress"]` + ruin `r cat_n$n[cat_n$category == "ruin"]` + palace `r cat_n$n[cat_n$category == "palace"]`；**时间轴 `r format(n_dated, big.mark = ",")`**；**热图 `r format(nrow(pv), big.mark = ",")`**。图上图例与脚注一律按各自面板的口径报数 |
-| 为什么地图与时间轴在同一张图上 | 版式签名是 **patchwork 上下拼接（地图上、时间轴下）**：上半是点阵世界地图、下半是同一份目录的时间轴堆叠面积，两者共用一条图例，主图脚注一次交代两个面板的口径 |
-| 第 4 色的依据 | 四类遗址需要四条颜料，土色系里可用的只有三条；按 CIEDE2000 在候选土色中取到与「深褐 / 砖橙 / 灰绿」最小色差最大者：`#7C6A52` ΔE `r sprintf("%.1f", de_ruin)`（其余候选 `r sprintf("%.1f", de_others[1])`–`r sprintf("%.1f", de_others[2])`；已用的三色互相最小 ΔE `r sprintf("%.1f", de_decl3)`）。堆叠带之间另加 0.18pt 底色描边，避免相邻两类靠色 |
+| 为什么地图与时间轴在同一张图上 | 上半是点阵世界地图、下半是同一份目录的时间轴堆叠面积，两者共用一条图例，主图脚注一次交代两个面板的口径 |
 | century 为什么不用 | `r n_cent_kind` 个取值全部可解析，且与 `year` 在 `r format(n_dated, big.mark = ",")` 行上零不一致 —— 它不提供 `year` 之外的信息，却含 1 行 `0th century`（Tokat Castle，`year = 0`）；时间轴一律用数值 `year` |
-| 投影与底图 | `coord_sf(crs = "+proj=robin")`；底图 `rnaturalearth::ne_countries(scale = 110)` 填极淡 `#F3E6C9`、零描边、去轴去网格；1 个点 = 1 个遗址 |
+| 投影与底图 | 地图用 Robinson 投影；底图取 Natural Earth 1:110m 国界，极淡米色填充、不描边、去轴去网格；1 个点 = 1 个遗址 |
 | 图上没有画的 | 任何未出现在数据里的注释地名；地标标注只取 `fame_rank` 前 3 行 |

@@ -555,8 +555,7 @@ kable(t5, format = "html",
 | 项 | 值 |
 | --- | --- |
 | 数据 | `data/country_lyrics.csv`（`r n_rows` × 8）、`data/top_all_writers.csv`（`r n_aw` × 2）、`data/top_primary_writers.csv`（`r n_pw_rows` × 2）、`data/top_producers.csv`（`r n_pp` × 2） |
-| 视觉身份 | 深酒红场 `#7A2E3C`；羊皮纸 `#F0E2CE`（墨、全体作者曲线、后期年代）；黄铜 `#C9A227`（主创作者曲线、早期年代）；石板 `#5A6270`（制作人曲线、基线、网格，不承载文字）；曲线末梢直标、无图例、只留 y = 1 一条基线 |
-| 字体与导出 | 标题与正文 Segoe UI，数字、轴标签与图注 Consolas；图以 `r TT_EXPORT$dpi` dpi 导出，底色与图一致 |
+| 配色与含义 | 羊皮纸 = 墨与全体作者曲线、后期年代；黄铜 = 主创作者曲线、早期年代；石板 = 制作人曲线与基线（不承载文字） |
 | 图 1 口径 | `r flow1`；rank 在同池内按计数降序；两条写作者曲线前 `r n_prefix` 名逐位相同，图上画成一条带黄铜芯的线（不是两条重叠线） |
 | 图 2 / 图 3 口径 | 分词前摘掉 `r n_tagged` 首歌里的 `[Verse]/[Chorus]` 段标；去掉 `tidytext::stop_words` 三词典并集、含撇号的缩写与残片（共 `r format(n_apostrophe, big.mark = ",")` 个 token 含撇号）与感叹词（oh、yeah、hey…）；保留 `r format(n_tok, big.mark = ",")` 个 token / `r format(n_vocab, big.mark = ",")` 个词型；丢弃最多的 token 是 `r drop_top_txt` |
 | 词频口径 | 以"歌"为文档单位（同一首歌里重复 20 次的词只算 1 次），避免副歌密度把某个词抬起来；图 2 报占比，图 3 报加一平滑对数几率（支持度 ≥ `r SUPPORT` 首） |

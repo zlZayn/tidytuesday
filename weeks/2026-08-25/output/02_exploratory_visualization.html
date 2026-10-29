@@ -2712,34 +2712,30 @@ vertical-align: -.125em;
 <td><code>data/country_lyrics.csv</code>（484 × 8）、<code>data/top_all_writers.csv</code>（510 × 2）、<code>data/top_primary_writers.csv</code>（71 × 2）、<code>data/top_producers.csv</code>（110 × 2）</td>
 </tr>
 <tr class="even">
-<td>视觉身份</td>
-<td>深酒红场 <code>#7A2E3C</code>；羊皮纸 <code>#F0E2CE</code>（墨、全体作者曲线、后期年代）；黄铜 <code>#C9A227</code>（主创作者曲线、早期年代）；石板 <code>#5A6270</code>（制作人曲线、基线、网格，不承载文字）；曲线末梢直标、无图例、只留 y = 1 一条基线</td>
+<td>配色与含义</td>
+<td>羊皮纸 = 墨与全体作者曲线、后期年代；黄铜 = 主创作者曲线、早期年代；石板 = 制作人曲线与基线（不承载文字）</td>
 </tr>
 <tr class="odd">
-<td>字体与导出</td>
-<td>标题与正文 Segoe UI，数字、轴标签与图注 Consolas；图以 240 dpi 导出，底色与图一致</td>
-</tr>
-<tr class="even">
 <td>图 1 口径</td>
 <td>raw 691 -&gt; plotted 671 (8 all-writer rows have song_count = 0 (log undefined); 12 duplicate names in the primary list collapsed by max)；rank 在同池内按计数降序；两条写作者曲线前 36 名逐位相同，图上画成一条带黄铜芯的线（不是两条重叠线）</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>图 2 / 图 3 口径</td>
 <td>分词前摘掉 47 首歌里的 <code>[Verse]/[Chorus]</code> 段标；去掉 <code>tidytext::stop_words</code> 三词典并集、含撇号的缩写与残片（共 8,984 个 token 含撇号）与感叹词（oh、yeah、hey…）；保留 44,869 个 token / 4,302 个词型；丢弃最多的 token 是 the 5175、you 4850、i 4738、a 4086、and 3306、to 2584、it 2470、on 2281</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>词频口径</td>
 <td>以”歌”为文档单位（同一首歌里重复 20 次的词只算 1 次），避免副歌密度把某个词抬起来；图 2 报占比，图 3 报加一平滑对数几率（支持度 ≥ 25 首）</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>年代划分</td>
 <td>2013–2015（181 首）与 2016–2019（303 首），按 <code>entered_top_30_in</code> 切</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td>不画的东西</td>
 <td>饼图与双 Y 轴（会把比例与量纲读错）；不把”主创作者”当成第二个人群（它是全量榜的切片）；不按”作者人数”给歌曲排名（采样曲会把原曲作者一并计入）；不引用歌词原文成句</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td>未处理的数据异常</td>
 <td>榜单与歌词重算的 42 处作者计数差额、7 个只在歌词侧出现的名字、制作人榜缺 62 位，以及 42 行 featuring（37 个不同合作者）一律如实报告，不擅自改数</td>
 </tr>
