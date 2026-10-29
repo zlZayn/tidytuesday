@@ -395,7 +395,9 @@ p_card <- ggplot(card) +
   geom_text(aes(x = 1, y = y, label = sec), hjust = 1, family = FAM_N,
             size = mm(TT_TYPE[["caption"]]), colour = PAL$body) +
   scale_colour_identity() +
-  scale_x_continuous(limits = c(-0.12, 1), expand = c(0, 0)) +
+  # 右侧留 4% 空白：第三列是 hjust = 1 贴着 x = 1 排的，若 limits 也收到 1，
+  # 词尾正好压在面板右缘上、被画布边界切掉（第一版就是这样，右侧看着像被裁了）。
+  scale_x_continuous(limits = c(-0.12, 1.04), expand = c(0, 0)) +
   scale_y_continuous(limits = c(0.5, nrow(card) + 0.5), expand = c(0, 0)) +
   theme_void() +
   theme(text            = element_text(family = FAM_T, size = TT_TYPE[["axis_text"]]),
