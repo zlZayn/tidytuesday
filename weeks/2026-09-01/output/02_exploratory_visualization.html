@@ -2324,21 +2324,17 @@ vertical-align: -.125em;
 </tr>
 <tr class="even">
 <td>为什么地图与时间轴在同一张图上</td>
-<td>版式签名是 <strong>patchwork 上下拼接（地图上、时间轴下）</strong>：上半是点阵世界地图、下半是同一份目录的时间轴堆叠面积，两者共用一条图例，主图脚注一次交代两个面板的口径</td>
+<td>上半是点阵世界地图、下半是同一份目录的时间轴堆叠面积，两者共用一条图例，主图脚注一次交代两个面板的口径</td>
 </tr>
 <tr class="odd">
-<td>第 4 色的依据</td>
-<td>四类遗址需要四条颜料，土色系里可用的只有三条；按 CIEDE2000 在候选土色中取到与「深褐 / 砖橙 / 灰绿」最小色差最大者：<code>#7C6A52</code> ΔE 19.9（其余候选 7.7–17.6；已用的三色互相最小 ΔE 30.4）。堆叠带之间另加 0.18pt 底色描边，避免相邻两类靠色</td>
-</tr>
-<tr class="even">
 <td>century 为什么不用</td>
 <td>35 个取值全部可解析，且与 <code>year</code> 在 3,610 行上零不一致 —— 它不提供 <code>year</code> 之外的信息，却含 1 行 <code>0th century</code>（Tokat Castle，<code>year = 0</code>）；时间轴一律用数值 <code>year</code></td>
 </tr>
-<tr class="odd">
-<td>投影与底图</td>
-<td><code>coord_sf(crs = &quot;+proj=robin&quot;)</code>；底图 <code>rnaturalearth::ne_countries(scale = 110)</code> 填极淡 <code>#F3E6C9</code>、零描边、去轴去网格；1 个点 = 1 个遗址</td>
-</tr>
 <tr class="even">
+<td>投影与底图</td>
+<td>地图用 Robinson 投影；底图取 Natural Earth 1:110m 国界，极淡米色填充、不描边、去轴去网格；1 个点 = 1 个遗址</td>
+</tr>
+<tr class="odd">
 <td>图上没有画的</td>
 <td>任何未出现在数据里的注释地名；地标标注只取 <code>fame_rank</code> 前 3 行</td>
 </tr>
