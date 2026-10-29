@@ -155,6 +155,30 @@
 
   /* ---------------- 抽屉开关 ---------------- */
 
+  /* 两种形态共用同一个 <nav>：
+       docked（宽屏默认）—— 钉在顶栏下方的常驻左栏，内容区右移，无遮罩、不抢焦点
+       overlay（窄屏 / 手动唤出）—— 原来的浮层抽屉：覆盖内容 + 遮罩 + 焦点陷阱
+     形态记在 <body data-nav>，CSS 按它切换布局；JS 只负责状态与焦点语义。 */
+  var NAV_MIN = 900;                 /* 与 hub.css 的 899px 断点对齐 */
+
+  function navMode() {
+    return document.body.getAttribute("data-nav");
+  }
+  function setNavMode(mode) {
+    document.body.setAttribute("data-nav", mode);
+    var docked = (mode === "docked");
+    drawerEl.setAttribute("data-open", docked ? "true" : "false");
+    if (!docked) {
+      /* 浮层态关闭时同步把遮罩收掉；钉住态遮罩由 CSS 直接隐藏 */
+      scrimEl.setAttribute("data-open", "false");
+      scrimEl.setAttribute("aria-hidden", "true");
+    }
+    /* 钉住态不是模态：不该有 aria-modal，也不该把 Tab 锁在侧栏里 */
+    drawerEl.setAttribute("aria-modal", docked ? "false" : "true");
+    drawerEl.setAttribute("role", docked ? "navigation" : "dialog");
+    menuEl.setAttribute("aria-expanded", docked ? "true" : "false");
+  }
+
   function drawerOpen() {
     return drawerEl.getAttribute("data-open") === "true";
   }
@@ -186,29 +210,50 @@
     back.focus();
   }
 
+  /* 顶栏按钮：从钉住态收起 → 内容区铺满且不弹浮层；
+     收起后再点 → 宽屏重新钉住，窄屏才弹浮层。 */
+  function collapseNav() {
+    tipHide(true);
+    drawerEl.setAttribute("data-open", "false");
+    scrimEl.setAttribute("data-open", "false");
+    scrimEl.setAttribute("aria-hidden", "true");
+    menuEl.setAttribute("aria-expanded", "false");
+    document.body.setAttribute("data-nav", "collapsed");
+    storeCollapsed(true);              /* 记住「用户想看满宽」，刷新后仍收起 */
+  }
+
   menuEl.addEventListener("click", function () {
+    if (window.innerWidth >= NAV_MIN) {
+      if (navMode() === "docked") { collapseNav(); }
+      else { setNavMode("docked"); storeCollapsed(false); }
+      return;
+    }
     if (drawerOpen()) { closeDrawer(); } else { openDrawer(); }
   });
-  closeEl.addEventListener("click", closeDrawer);
+  closeEl.addEventListener("click", function () {
+    if (navMode() === "docked") { collapseNav(); } else { closeDrawer(); }
+  });
   scrimEl.addEventListener("click", closeDrawer);
 
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") {
-      if (drawerOpen()) { e.preventDefault(); closeDrawer(); }
+      /* 钉住态不吞 Esc：它不是模态层，用户按 Esc 未必想收起侧栏；
+         浮层态才关（这是浮层的约定动作）。 */
+      if (drawerOpen() && navMode() !== "docked") { e.preventDefault(); closeDrawer(); }
       else { tipHide(true); }
       return;
     }
-    /* 快捷键：m 唤出（输入框里不触发） */
+    /* 快捷键：m 唤出 / 收起（输入框里不触发） */
     if ((e.key === "m" || e.key === "M") && !e.ctrlKey && !e.metaKey && !e.altKey) {
       var tag = (e.target && e.target.tagName || "").toLowerCase();
       if (tag !== "input" && tag !== "textarea" && !e.target.isContentEditable) {
         e.preventDefault();
-        if (drawerOpen()) { closeDrawer(); } else { openDrawer(); }
+        menuEl.click();                  /* 与点按钮同一套语义，避免两处分支漂移 */
       }
       return;
     }
-    /* Tab 循环约束在抽屉内 */
-    if (e.key === "Tab" && drawerOpen()) {
+    /* Tab 循环只约束浮层态：钉住的侧栏是常驻导航，不该把键盘关在里面 */
+    if (e.key === "Tab" && drawerOpen() && navMode() !== "docked") {
       var items = Array.prototype.filter.call(
         drawerEl.querySelectorAll(FOCUSABLE),
         function (n) { return n.offsetParent !== null; }
@@ -252,7 +297,9 @@
     tab.appendChild(d);
     tab.addEventListener("click", function () {
       activate(index);
-      closeDrawer();                       /* 选中后自动收起 */
+      /* 浮层态：选中后自动收起，把屏幕还给报告；
+         钉住态：侧栏是常驻的，选中不动它（否则每选一周都要重新打开）。 */
+      if (navMode() !== "docked") { closeDrawer(); }
     });
     li.appendChild(tab);
 
@@ -329,6 +376,50 @@
   /* 周数进小标签，生成日期单独一行（它指「本页何时生成」，不是某一周的日期） */
   countEl.textContent = weeks.length + " 周";
   genEl.textContent = "生成于 " + data.generated;
+
+  /* ---------------- 初始形态 ---------------- */
+
+  /* 进入页面时的默认：宽屏把周列表钉成左侧栏（内容区右移），窄屏保持收起，
+   需要时才点按钮 / 按 M 唤出浮层。
+   用户若手动收起过，本次会话内记住这个选择（sessionStorage，跨刷新生效但
+   不跨标签页共享；隐私模式下 setItem 可能抛错，一律吞掉）。
+   注意：钉住态不移动焦点 —— 页面打开时用户要读报告，不该被拽进侧栏。 */
+  var NAV_KEY = "hub-nav-collapsed";
+
+  function storedCollapsed() {
+    try { return window.sessionStorage.getItem(NAV_KEY) === "1"; }
+    catch (err) { return false; }
+  }
+  function storeCollapsed(v) {
+    try { window.sessionStorage.setItem(NAV_KEY, v ? "1" : "0"); }
+    catch (err) { /* 隐私模式 / 禁用存储：退化成每次都用默认值 */ }
+  }
+
+  function applyInitialNav() {
+    if (window.innerWidth < NAV_MIN) {
+      setNavMode("collapsed");
+      return;
+    }
+    setNavMode(storedCollapsed() ? "collapsed" : "docked");
+  }
+
+  applyInitialNav();
+
+  /* 跨断点时重新决定形态：从宽到窄必须收起（否则侧栏会挤掉半个报告），
+     从窄到宽恢复「默认展开」但尊重本会话内的手动收起。 */
+  var resizeTimer = null;
+  window.addEventListener("resize", function () {
+    if (resizeTimer) { clearTimeout(resizeTimer); }
+    resizeTimer = setTimeout(function () {
+      resizeTimer = null;
+      var wide = window.innerWidth >= NAV_MIN;
+      if (!wide) {
+        if (navMode() === "docked") { setNavMode("collapsed"); }
+      } else if (navMode() === "collapsed" && !storedCollapsed()) {
+        setNavMode("docked");
+      }
+    }, 150);
+  });
 
   /* 进入页面直接展示最新一周（列表首项 = 目录名最大）：
      只请求这一份报告，其余周仍需用户主动选择才加载。 */

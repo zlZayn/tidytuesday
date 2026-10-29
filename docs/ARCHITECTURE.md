@@ -20,7 +20,7 @@
 1. `code/fetch_tt.R [日期]` 经 `tidytuesdayR` 下载 → `weeks/<date>/data/<dataset>.csv`。
 2. `01_data_check.qmd`（`params$week` 指定周次）→ 7 步质量检查 + 清洗审计 + 整洁演示 → `output/01_data_check.html` 与 `output/<dataset>_cleaned.csv`。
 3. `02_exploratory_visualization.qmd` → 图表与解读 → `output/02_exploratory_visualization.html`。
-4. `code/update_site.R` 扫描各周产物（02 优先、回退 01）→ 读 `assets/site/` 下的模板与静态资源 → 占位符替换生成根 `index.html`（只做「外壳」：薄顶栏 + 唤出式抽屉列周，进页面即展示最新一周）。
+4. `code/update_site.R` 扫描各周产物（02 优先、回退 01）→ 读 `assets/site/` 下的模板与静态资源 → 占位符替换生成根 `index.html`（只做「外壳」：薄顶栏 + 宽屏常驻左栏列周，进页面即展示最新一周）。
 5. `.githooks/pre-commit`：提交触及 `weeks/`、`assets/site/` 或 `code/update_site.R` 时重跑 `update_site.R`，把 `index.html` 并入本次提交。
 6. `.github/workflows/deploy.yml`：push 到 main → CI 跑 `code/check_site_index.py` 只校验不生成 → Vercel 经 Git 集成自动部署整仓。
 
@@ -31,7 +31,8 @@
 - `01_data_check.qmd` 是参数化通用模板：各周共用同一份检查逻辑，只改 `params$week`。
 - 入口页由脚本生成而非手写：新增周不改 HTML，避免手写清单漂移。
 - 入口页是「薄外壳」+ 按需加载：进页面即加载**最新一周**（仅这一份请求），其余周选中才创建该周 iframe 并设 `src`（单周 gzip 后 1.3–3.3 MiB，全量十余周约 27 MiB）。已创建的面板留在 DOM 中切显隐，切回零请求。
-- 入口页把自身 UI 压到最小、内容区最大化：顶栏固定 44px 单行，周列表放在默认收起的悬浮抽屉里（点遮罩 / `Esc` / 选中后自动收起），`iframe` 铺满顶栏以下区域且无 padding / border / margin。视觉沿用报告自身的 cosmo 令牌（字体栈、`#373a3c` 前景、`#e1e1e1` 边框、6px 圆角、`#2780e3` 强调色）与 `assets/styles.css` 的品牌渐变，不引入第二套设计语言。
+- 入口页把自身 UI 压到最小：顶栏固定 44px 单行，周列表**在宽屏（≥ 900px）默认钉成顶栏下方的常驻左栏**，内容区右移让位；窄屏与手动唤出时退回浮层抽屉（覆盖内容 + 遮罩，点遮罩 / `Esc` / 选中后自动收起）。`iframe` 铺满内容区且无 padding / border / margin。视觉沿用报告自身的 cosmo 令牌（字体栈、`#373a3c` 前景、`#e1e1e1` 边框、6px 圆角、`#2780e3` 强调色）与 `assets/styles.css` 的品牌渐变，不引入第二套设计语言。
+- 常驻左栏与浮层抽屉共用**同一个 `<nav>` 节点**，靠 `<body data-nav="docked|collapsed">` 切换布局，不维护两套 DOM。语义随之切换：钉住态是常驻导航（`role="navigation"`、无 `aria-modal`、无遮罩、不做焦点陷阱、选中某周后不收起），浮层态才是模态层（`role="dialog"`、`aria-modal="true"`、遮罩、Tab 锁在层内、选中即收起）。
 - 身份分三层且各归其位：**主题**是顶栏字标「TidyTuesday 可视化」（本站是对官方数据的个人练习，字标里不写「官方」也不写作者名）；**作者**只在八爪鱼图标与仓库链接的悬浮提示里出现；**来源**由各周报告自身的 `TidyTuesday · 日期` 副标题承担，入口页不重复声明。`<title>` 保留作者名，供标签页与书签识别。
 - 顶栏与抽屉的图标按钮一律纯 SVG、不写可见文字，文字由 `data-tip` 悬浮提示承载（黑框 `#333`、4px 圆角，对齐报告内 tippy 观感）；悬停延迟约 400ms 出现、键盘聚焦立即出现。尺寸与字号集中在 `hub.css` 顶部的变量里（字号五档、图标尺寸两档），SVG 不写 `width`/`height`，避免同一图标在两处大小不一。
 - 文本不用 `·` 这类字符做分隔：周数与生成日期分别走 `.chip` 小标签与独立一行，日期与标题之间的间距由 CSS 的 `margin` 给。生成日期放在抽屉顶部而不是顶栏，避免被读成某一周的日期。

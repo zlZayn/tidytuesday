@@ -17,6 +17,8 @@
 
 :root {
   --hub-header-h: 44px;
+  /* 钉住态左侧栏宽度；窄屏下浮层抽屉也复用这个值 */
+  --hub-nav-w: 300px;
 
   --hub-bg: #fff;
   --hub-fg: #373a3c;
@@ -232,6 +234,28 @@ body {
 }
 .hub-stage { position: absolute; inset: 0; }
 
+/* ---------- 钉住的左侧栏（宽屏默认展开） ----------
+   宽屏下不把周列表做成「浮层 + 遮罩」，而是钉在顶栏下方当常驻侧栏：
+   内容区整体右移，遮罩不出现，报告不会被压暗，也不抢焦点。
+   窄屏（见文末 media query）退化成原来的浮层抽屉：覆盖内容、带遮罩。
+   两种形态共用同一个 <nav>，靠 body 上的 data-nav 切换，避免两套 DOM 漂移。 */
+body[data-nav="docked"] .hub-main { inset: var(--hub-header-h) 0 0 var(--hub-nav-w); }
+body[data-nav="docked"] .hub-drawer {
+  top: var(--hub-header-h);
+  width: var(--hub-nav-w);
+  transform: none;
+  visibility: visible;
+  box-shadow: none;
+  transition: none;              /* 钉住态不需要滑入动画 */
+}
+body[data-nav="docked"] .hub-drawer .hub-close { display: none; }
+body[data-nav="docked"] .hub-scrim { display: none; }
+
+/* 钉住态里内容区右移，报告 iframe 的宽度随之变化，需要重算 */
+@media (prefers-reduced-motion: reduce) {
+  body[data-nav="docked"] .hub-main { transition: none; }
+}
+
 /* 每周一个面板：懒创建，只有激活的那个显示。
    已加载过的面板留在 DOM 里，切回零请求。 */
 .panel { position: absolute; inset: 0; display: none; }
@@ -291,7 +315,7 @@ body {
   top: 0;
   bottom: 0;
   left: 0;
-  width: min(340px, 88vw);
+  width: min(var(--hub-nav-w), 88vw);
   display: flex;
   flex-direction: column;
   background: var(--hub-bg);
@@ -483,6 +507,21 @@ body {
   .hub-meta .now .d { font-size: var(--hub-fs-micro); }
 
   .hub-drawer { width: 88vw; }
+}
+
+/* 窄屏一律退回浮层抽屉：钉住的侧栏会挤掉报告宽度（Hub 的定位是内容优先） */
+@media (max-width: 899px) {
+  body[data-nav="docked"] .hub-main { inset: var(--hub-header-h) 0 0 0; }
+  body[data-nav="docked"] .hub-drawer {
+    top: 0;
+    width: min(var(--hub-nav-w), 88vw);
+    transform: translateX(-102%);
+    visibility: hidden;
+    box-shadow: var(--hub-shadow);
+    transition: transform .24s var(--hub-ease), visibility 0s linear .24s;
+  }
+  body[data-nav="docked"] .hub-drawer .hub-close { display: flex; }
+  body[data-nav="docked"] .hub-scrim { display: block; }
 }
 
 /* 更窄（约 375px）：品牌继续收紧，标题让步给省略号 */
