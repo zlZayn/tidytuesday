@@ -18,7 +18,7 @@
 - 启用仓库钩子（**每个 clone 各做一次**）：`git config core.hooksPath .githooks`。启用后，凡触及 `weeks/`、`assets/site/`、`code/update_site.R` 的提交都会自动重跑 `update_site.R` 并把 `index.html` 加进本次提交，忘了跑不会发生。
 - 校验入口页与周目录是否同步：`python code/check_site_index.py`（纯标准库、无网络，约 140 ms；不同步时打印该跑什么）
 - 链接校验：`python "$env:USERPROFILE\.agents\skills\maintenance-flow\check-markdown-links.py" . --fragments --refs`
-- 换行校验：`python "$env:USERPROFILE\.agents\skills\maintenance-flow\check-line-endings.py" .`（只读模式只报「单文件混用行尾」，当前 0 个；写入模式必须先限定范围，如 `--ext .md --ext .qmd --ext .yml --ext .R`）
+- 换行校验：`python "$env:USERPROFILE\.agents\skills\maintenance-flow\check-line-endings.py" .`（只读模式只报「单文件混用行尾」，当前 1 个：`weeks/2026-11-03/data/grambank_parameters.csv`，是上游原文，见「活跃坑」；写入模式必须先限定范围，如 `--ext .md --ext .qmd --ext .yml --ext .R`）
 
 ## 验证快照
 
@@ -54,6 +54,7 @@
 - `--hub-faint` 透明度不得低于 `.70`：它用于 11–12px 的日期类小字，`.55` 时对白底仅 3.09:1，低于 WCAG AA 4.5:1；`.70` 实测 4.62:1。
 - 周目录 `data/` 为空时 `01_data_check.qmd` 渲染会中断：setup 只 `cat` 一句警告，但「周级整洁汇总」的 `count()` 找不到列会报错（该 chunk 未设 `error: true`）。
 - 行尾是两分现状，不追求统一：手写 `.md` / `.qmd` / `.yml` / `.R` 与脚本生成的 `index.html` 为 LF；`assets/styles.css`（手写例外）与 Quarto 产物（`weeks/<date>/output/*.html`）为 CRLF。工具的硬判据只有「单文件不得混用」；`--target lf --write` 不带 `--ext` 会改写全仓的 CRLF 文件（CSS 与 Quarto 产物），不要无条件跑。
+- **上游数据自己会带 CRLF**：`weeks/2026-11-03/data/grambank_parameters.csv` 的 `feature_description` 是 CLDF 导出的多行文本，字段内嵌 13,451 处 CRLF（全部成对，不是行尾错乱），使它成为全仓唯一「单文件混用行尾」的文件。`data/` 是只读快照，**不要为过校验去改它**；能做的是在 `01_data_check.qmd` 的清洗步骤里把派生 CSV 的字段内 CRLF 归一为 LF（2026-11-03 已这么做，清洗日志里记作「字段内换行归一」）。后续若某周再遇到，同一处理即可。
 - `update_site.R` 写 `index.html` 必须用二进制连接（`file(..., "wb")` + `writeBin`）：默认文本连接在 Windows 把 `\n` 翻成 CRLF、在 Linux CI 写 LF，同一输入两边字节不同，CI 会把整份文件重写一遍（368 行全变）并产生无意义 commit。改动后核对「本地钩子生成」与「CI 校验」两侧一致。
 - 报告不展示 R 源码：报告 chunk 一律 `#| echo: false`（`code-fold: true` 只在 echo 的块上生效，会把源码折进 `<details>`）；判据是产物中 `<pre` 计数为 0——`class="sourceCode` 会假阳性，Quarto 把自带的代码样式表以 base64 内嵌，grep 到的全是 CSS 规则而非展示出来的源码。
 - 推送后不必等远程 CI：`Check site entry page` 只跑 `check_site_index.py`，实测 9 s。它也只校验不生成，红叉不阻断 Vercel 部署（Vercel 直接监听 main）。历史上那条 CI 曾因 `r-lib/actions/setup-r@v2` 耗时 27 s ~ 22 m35 s 剧烈波动（2026-10-01 那次 job 总 22 m37 s，其中 setup-r 占 22 m35 s，真正的脚本只跑 1 s），已于 2026-10-02 改为本地钩子 + 只读校验。
