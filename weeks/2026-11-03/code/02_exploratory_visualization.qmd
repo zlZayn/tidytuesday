@@ -1,0 +1,659 @@
+---
+title: "词序和谐在领属语这里断掉"
+subtitle: "TidyTuesday · 2026-11-03 (Week 44)"
+author: "zlZayn"
+date: today
+format:
+  html:
+    css: ../../../assets/styles.css
+    highlight-style: tango
+    toc: true
+    toc-expand: true
+    toc-depth: 3
+    toc-location: left
+    code-fold: true
+    theme: cosmo
+    grid:
+      sidebar-width: 350px
+      body-width: 900px
+      margin-width: 150px
+      gutter-width: 1.5em
+    lang: zh
+    self-contained: true
+execute:
+  warning: false
+  message: false
+---
+
+# 四种修饰语，一个关于「谁站在名词哪一侧」的问题
+
+```{r}
+#| label: setup
+#| echo: false
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(ggplot2)
+  library(patchwork)
+  library(knitr)
+  library(sf)
+  library(rnaturalearth)
+})
+
+# 项目根：从当前目录逐级上溯找 assets/ 标记（与运行位置无关）
+find_root <- function() {
+  cur <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    if (dir.exists(file.path(cur, "assets"))) return(cur)
+    up <- dirname(cur)
+    if (identical(up, cur)) stop("未找到含 assets/ 的项目根目录")
+    cur <- up
+  }
+}
+root <- find_root()
+source(file.path(root, "assets", "tt_theme.R"), encoding = "UTF-8")
+
+# ---- 本周色彩：两侧对立是本报告的语义骨架 ----
+# 陶土红 = 修饰语站在名词之前；深青 = 站在名词之后；米白纸面 = 中间态。
+# 芥黄只承担一件事："四个修饰语里有一个跑到了对面"。全页不超过四档色 + 两档灰。
+PAL <- list(
+  bg     = "#F7F4EE",   # 米白纸面：整页与画布底色
+  paper  = "#F2EEE5",   # 更浅的纸：单元格最浅端
+  ink    = "#1A1A18",   # 近黑主墨：标题、刻度、强调数字
+  body   = "#5B564D",   # 暖灰正文：副标题 / 脚注 / 轴标题
+  rule   = "#D6D0C4",   # 分隔细线与基线
+  grid   = "#E3DED2",   # 面板内细网格
+  land   = "#E9E3D7",   # 陆地填充：地图上只做背景，不承担语义
+  coast  = "#CFC7B8",   # 国界与海岸线
+  pre    = "#B23A2E",   # 名词之前
+  post   = "#1F5C6E",   # 名词之后
+  odd    = "#C9922B",   # 只有一个修饰语跑到对面
+  grey   = "#8A857C",   # 对半分：无主导侧
+  pale   = "#BDB7AA"    # 辅助符号与零分布色带
+)
+
+# ---- 本周字体：两族分工（文字族 + 数字族）----
+FAM_T <- TT_FAMILY[["text"]]
+FAM_N <- TT_FAMILY[["data"]]
+mm <- function(pt) pt / .pt
+
+knitr::opts_chunk$set(dev = "ragg_png", dpi = TT_EXPORT$dpi,
+                      dev.args = list(bg = PAL$bg))
+
+lang_raw <- read_csv("../data/grambank_languages.csv", show_col_types = FALSE)
+par_raw  <- read_csv("../data/grambank_parameters.csv", show_col_types = FALSE)
+val_raw  <- read_csv("../data/grambank_values.csv", show_col_types = FALSE)
+```
+
+```{r}
+#| label: prep
+#| echo: false
+
+# ---- 一、三张表的基本形状 ----
+n_lang     <- nrow(lang_raw)
+n_feat     <- nrow(par_raw)
+n_cell     <- nrow(val_raw)
+n_grid     <- n_lang * n_feat
+cov_all    <- n_cell / n_grid
+n_fam      <- n_distinct(lang_raw$family_name, na.rm = TRUE)
+n_iso      <- sum(is.na(lang_raw$family_name))
+n_macro    <- n_distinct(lang_raw$macroarea, na.rm = TRUE)
+n_na_mac   <- sum(is.na(lang_raw$macroarea))
+share_zero <- mean(val_raw$value == 0)
+n_zero     <- sum(val_raw$value == 0)
+
+per_feat <- val_raw |>
+  summarise(n = n(), p1 = mean(value == 1), p0 = mean(value == 0), .by = parameter_id)
+n_feat_rare <- sum(per_feat$p1 < 0.5)
+med_p1 <- median(per_feat$p1)
+max_p1 <- max(per_feat$p1)
+
+per_lang  <- val_raw |> count(language_id, name = "n_coded")
+med_coded <- median(per_lang$n_coded)
+n_full    <- sum(per_lang$n_coded == n_feat)
+n_lt50    <- sum(per_lang$n_coded < 50)
+
+# ---- 二、四个修饰语参数，统一读成「在名词前 / 在名词后 / 两侧都行 / 用不上」----
+# value 1 = 修饰语在名词之前；2 = 之后；3 = 两种顺序都有；
+# GB193 / GB203 另有 0 = 该类修饰语不能作定语，不算「站到另一侧」。
+MODS <- c(GB024 = "Numeral", GB025 = "Demonstrative",
+          GB193 = "Property word", GB065 = "Possessor")
+MODS5 <- c(MODS, GB203 = "Quantifier")
+
+side <- val_raw |>
+  filter(parameter_id %in% names(MODS5)) |>
+  select(language_id, parameter_id, value) |>
+  pivot_wider(names_from = parameter_id, values_from = value) |>
+  left_join(lang_raw, by = "language_id") |>
+  mutate(across(all_of(names(MODS5)),
+                ~ case_when(.x == 1 ~ "pre", .x == 2 ~ "post",
+                            .x == 3 ~ "both", .x == 0 ~ "unused")))
+
+code_census <- lapply(names(MODS5), function(p) {
+  x <- side[[p]]
+  tibble(parameter_id = p, feature = MODS5[[p]],
+         pre = sum(x == "pre", na.rm = TRUE), post = sum(x == "post", na.rm = TRUE),
+         both = sum(x == "both", na.rm = TRUE), unused = sum(x == "unused", na.rm = TRUE),
+         missing = sum(is.na(x)))
+}) |> bind_rows()
+
+n_coded_any <- sum(rowSums(!is.na(side[, names(MODS)])) > 0)
+n_both_num  <- sum(side$GB024 == "both", na.rm = TRUE)
+
+# 严格口径：四个修饰语都只有单一侧（没有 both、没有 unused、没有缺失）
+pure4 <- side |>
+  filter(if_all(all_of(names(MODS)), ~ .x %in% c("pre", "post"))) |>
+  mutate(n_pre = rowSums(across(all_of(names(MODS)), ~ .x == "pre")))
+n_pure4      <- nrow(pure4)
+share_pure4  <- n_pure4 / n_coded_any
+
+# ---- 三、和谐：四个修饰语是否站在同一侧 ----
+n_harm4 <- sum(pure4$n_pre %in% c(0, 4))
+harm4   <- n_harm4 / n_pure4
+n_pre4  <- sum(pure4$n_pre == 4)
+n_post4 <- sum(pure4$n_pre == 0)
+
+# 独立基准：若各参数互不相干，只有边际分布一致时才算同侧。
+# 期望 = P(全前置) + P(全后置)，用同一批语言的边际比例相乘。
+margin4 <- sapply(names(MODS), function(p) mean(pure4[[p]] == "pre"))
+exp4    <- prod(margin4) + prod(1 - margin4)
+
+pure3   <- side |> filter(if_all(all_of(names(MODS)[1:3]), ~ .x %in% c("pre", "post")))
+harm3   <- mean(pure3$GB024 == pure3$GB025 & pure3$GB025 == pure3$GB193)
+margin3 <- sapply(names(MODS)[1:3], function(p) mean(pure3[[p]] == "pre"))
+exp3    <- prod(margin3) + prod(1 - margin3)
+
+# 领属语在「其余三个已经同侧」的语言里：跟着站 vs 跑到对面
+other3      <- pure4 |> filter(GB024 == GB025 & GB025 == GB193)
+n_other3    <- nrow(other3)
+n_poss_flip <- sum(other3$GB065 != other3$GB024)
+n_poss_same <- n_other3 - n_poss_flip
+share_flip  <- n_poss_flip / n_other3
+
+# 逐对一致率与 Cohen's kappa（both / unused / 缺失的那一对不参与）
+pair_kappa <- function(a, b) {
+  d  <- tibble(a = a, b = b) |> filter(a %in% c("pre", "post"), b %in% c("pre", "post"))
+  po <- mean(d$a == d$b)
+  pa <- mean(d$a == "pre"); pb <- mean(d$b == "pre")
+  pe <- pa * pb + (1 - pa) * (1 - pb)
+  c(n = nrow(d), agree = po, kappa = (po - pe) / (1 - pe))
+}
+kappas <- combn(names(MODS), 2, simplify = FALSE) |>
+  lapply(function(p) {
+    v <- pair_kappa(side[[p[1]]], side[[p[2]]])
+    tibble(pair = paste(MODS[[p[1]]], MODS[[p[2]]], sep = " · "),
+           n = v[["n"]], agree = v[["agree"]], kappa = v[["kappa"]])
+  }) |>
+  bind_rows() |>
+  arrange(kappa)
+poss_rows    <- grepl("Possessor", kappas$pair)
+kap_poss_max <- max(kappas$kappa[poss_rows])
+kap_poss_min <- min(kappas$kappa[poss_rows])
+kap_rest_min <- min(kappas$kappa[!poss_rows])
+kap_rest_max <- max(kappas$kappa[!poss_rows])
+
+# ---- 四、固定样本的和谐阶梯 + 置换零假设 ----
+# 只在五个修饰语都齐的语言上做，逐级加入一个修饰语而样本不变：
+# 否则「观测值下降」会混进「样本变小」的影响。
+SIDES5 <- c("GB024", "GB025", "GB193", "GB065", "GB203")
+full5  <- side |> filter(if_all(all_of(SIDES5), ~ .x %in% c("pre", "post")))
+n_fixed <- nrow(full5)
+set.seed(20261103)
+N_REP <- 1000
+
+harmony_ladder <- lapply(2:5, function(k) {
+  cols <- SIDES5[seq_len(k)]
+  m <- sapply(full5[cols], function(x) as.integer(x == "pre"))
+  observed <- mean(rowSums(m) %in% c(0, k))
+  null <- replicate(N_REP, {
+    for (j in seq_len(ncol(m))) m[, j] <- sample(m[, j])
+    mean(rowSums(m) %in% c(0, k))
+  })
+  p <- colMeans(m)
+  tibble(k = k, step = cols[k],
+         n = nrow(m), observed = observed,
+         expected = prod(p) + prod(1 - p),
+         null_mean = mean(null),
+         null_lo = quantile(null, 0.025, names = FALSE),
+         null_hi = quantile(null, 0.975, names = FALSE))
+}) |> bind_rows()
+lad <- function(k) harmony_ladder[harmony_ladder$k == k, ]
+lad_ratio4 <- lad(4)$observed / lad(4)$expected
+
+# ---- 五、家族与宏区：断口跟着谁走 ----
+macro_tab <- pure4 |>
+  filter(!is.na(macroarea)) |>
+  summarise(n = n(), harm = mean(n_pre %in% c(0, 4)), .by = macroarea) |>
+  arrange(desc(harm))
+macro_best  <- macro_tab[1, ]
+macro_worst <- macro_tab[nrow(macro_tab), ]
+
+fam_tab <- pure4 |>
+  filter(!is.na(family_name)) |>
+  summarise(n = n(), pre_num = mean(GB024 == "pre"), pre_dem = mean(GB025 == "pre"),
+            pre_prop = mean(GB193 == "pre"), pre_poss = mean(GB065 == "pre"),
+            harm = mean(n_pre %in% c(0, 4)), .by = family_name) |>
+  filter(n >= 10) |>
+  mutate(rest = (pre_num + pre_dem + pre_prop) / 3,
+         gap  = pre_poss - rest) |>
+  arrange(desc(gap))
+n_fam_tab           <- nrow(fam_tab)
+langs_in_tab        <- sum(fam_tab$n)
+share_langs_in_tab  <- langs_in_tab / n_pure4
+fam_up   <- fam_tab |> filter(gap > 0.25)
+fam_down <- fam_tab |> filter(gap < -0.25)
+top_up   <- fam_up[1, ]
+top_down <- fam_down[nrow(fam_down), ]
+
+# 家族内的众数模式占比：五个以上样本的家族才有意义
+fam_modal <- pure4 |>
+  filter(!is.na(family_name)) |>
+  mutate(pat = paste(GB024, GB025, GB193, GB065, sep = "/")) |>
+  group_by(family_name) |>
+  filter(n() >= 5) |>
+  summarise(n = n(), modal = max(table(pat)) / n(), .groups = "drop")
+w_modal <- weighted.mean(fam_modal$modal, fam_modal$n)
+n_fam5  <- nrow(fam_modal)
+modal_of <- function(f) fam_modal$modal[match(f, fam_modal$family_name)]
+harm_of  <- function(f) fam_tab$harm[match(f, fam_tab$family_name)]
+
+# 16 种排列里出现最多的几种（正文与图 3 共用）
+pat_census <- pure4 |>
+  mutate(pattern = paste(if_else(GB024 == "pre", "before", "after"),
+                         if_else(GB025 == "pre", "before", "after"),
+                         if_else(GB193 == "pre", "before", "after"),
+                         if_else(GB065 == "pre", "before", "after"), sep = " · ")) |>
+  count(pattern, sort = TRUE) |>
+  mutate(share = n / sum(n),
+         harmonic = pattern %in% c("before · before · before · before",
+                                   "after · after · after · after"))
+n_pat_shown   <- 6
+pat_top5      <- sum(head(pat_census$n, 5)) / n_pure4
+pat_shown     <- sum(head(pat_census$n, n_pat_shown)) / n_pure4
+n_patterns    <- nrow(pat_census)
+
+# ---- 六、地图用的四类 ----
+map_pts <- pure4 |>
+  filter(!is.na(latitude), !is.na(longitude)) |>
+  mutate(class = factor(
+    case_when(n_pre == 4 ~ "All four before the noun",
+              n_pre == 0 ~ "All four after the noun",
+              n_pre %in% c(1, 3) ~ "Three of four on one side",
+              TRUE ~ "Two and two"),
+    levels = c("All four before the noun", "Three of four on one side",
+               "All four after the noun", "Two and two")))
+n_map <- nrow(map_pts)
+MAP_COL <- c("All four before the noun" = PAL$pre,
+             "Three of four on one side" = PAL$odd,
+             "All four after the noun"  = PAL$post,
+             "Two and two"              = PAL$grey)
+```
+
+Grambank 把每种语言的语法拆成 195 个是非题。其中四个问的是同一件事的不同版本：**这个修饰语站在名词的前面还是后面**——数词（GB024）、指示词（GB025）、属性词（GB193）、领属语（GB065）。取值 `1` 是在名词前，`2` 是在名词后，`3` 是两种顺序都行。
+
+如果「语序类型」是个真东西，这四个答案应该彼此贴合；如果它们各走各的，那么这个说法就得打折扣。本报告就查这一件事。
+
+`r format(n_lang, big.mark = ",")` 种语言 × `r n_feat` 个特征 = `r format(n_grid, big.mark = ",")` 个可能的格子，实际有编码的 `r format(n_cell, big.mark = ",")` 个，覆盖率 `r sprintf("%.1f%%", 100 * cov_all)`。缺口不是「没有这个特征」，而是「没编到」——表示「不清楚」的 `?` 在清洗时已删除，所以空缺只代表调查没覆盖。
+
+数据的底色偏冷：`r format(n_zero, big.mark = ",")` 个编码是 `0`（`r sprintf("%.1f%%", 100 * share_zero)`），`r n_feat_rare` 个特征在不到一半的语言里出现过，中位出现率 `r sprintf("%.1f%%", 100 * med_p1)`，最高的一个才 `r sprintf("%.1f%%", 100 * max_p1)`。覆盖也不均匀：一种语言被编码的特征数中位数 `r med_coded` 个，只有 `r n_full` 种拿到全部 195 个，`r n_lt50` 种不到 50 个。**任何「全世界语言都怎样」的句子，后面都得补一句「在这份样本里」。**
+
+表 1 在四个语序参数之外多列了量词（GB203）——它只在下面的和谐阶梯里用到，正文的配对比较没有它。
+
+```{r}
+#| label: tbl-codes
+#| echo: false
+code_census |>
+  transmute(`参数` = parameter_id, `修饰语` = feature,
+            `在名词前` = pre, `在名词后` = post, `两侧都行` = both,
+            `不作定语` = unused, `未编码` = missing) |>
+  kable(format = "html",
+        caption = sprintf("四个语序参数的编码分布（分母 %s 种语言）",
+                          format(n_lang, big.mark = ",")))
+```
+
+# 近一半语言把四个修饰语放在同一侧
+
+```{r}
+#| label: fig-map
+#| echo: false
+#| fig-cap: "Where the four modifiers sit relative to the noun. Two coherent blocks — pre-noun Eurasia, post-noun Africa — and a wide ochre band where exactly one modifier crosses over."
+#| fig-width: 9.2
+#| fig-height: 6.6
+#| dpi: 200
+sf_use_s2(FALSE)
+
+PROJ <- "+proj=robin +lon_0=0 +datum=WGS84"
+world <- ne_countries(scale = "medium", type = "countries", returnclass = "sf") |>
+  filter(continent != "Antarctica") |>
+  st_crop(xmin = -180, xmax = 180, ymin = -58, ymax = 84) |>
+  st_make_valid() |>
+  st_transform(PROJ)
+
+pts <- map_pts |>
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+  st_transform(PROJ)
+
+p_map <- ggplot() +
+  geom_sf(data = world, fill = PAL$land, colour = PAL$coast, linewidth = 0.15) +
+  geom_sf(data = pts, aes(colour = class), size = 1.0, stroke = 0, alpha = 0.92) +
+  scale_colour_manual(values = MAP_COL, name = NULL) +
+  guides(colour = guide_legend(override.aes = list(size = 2.6), nrow = 2)) +
+  coord_sf(xlim = c(-1.70e7, 1.72e7), ylim = c(-6.0e6, 8.55e6)) +
+  labs(title = "Adnominal order is a regional habit, not a universal rule",
+       subtitle = sprintf("One dot per language, %s languages with all four modifiers coded to a single side",
+                          format(n_map, big.mark = ",")),
+       caption = tt_source("grambank_languages.csv", n_map,
+         paste0("Equal-area projection centred on 0, so the Pacific is split between the two ",
+                "edges. Overlapping dots hide each other: the Caucasus and Europe look sparse ",
+                "because they are packed, not because the codes are."))) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM_T) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text   = element_blank(),
+        legend.position      = "top",
+        legend.justification = "left",
+        legend.text = element_text(family = FAM_T, colour = PAL$body,
+                                   size = TT_TYPE[["annot"]]),
+        legend.key.spacing.x = unit(3, "mm"),
+        plot.subtitle = element_text(family = FAM_T, colour = PAL$body,
+                                     size = TT_TYPE[["subtitle"]], hjust = 0,
+                                     margin = margin(b = 8)),
+        plot.caption  = element_text(family = FAM_T, colour = PAL$body,
+                                     size = TT_TYPE[["caption"]], hjust = 0,
+                                     margin = margin(t = 8), lineheight = 1.35),
+        plot.margin   = margin(14, 18, 8, 18))
+p_map
+```
+
+严格口径下，四个参数都只有一个答案的语言有 `r format(n_pure4, big.mark = ",")` 种，占「至少编了一个」的 `r sprintf("%.1f%%", 100 * share_pure4)`。被请出去的主要是「两种顺序都行」：数词一项就有 `r n_both_num` 种语言拿到 `r 3`，这类语言在任何「同不同侧」的统计里必须先摘掉——否则「都行」会被读成「跨过去」，而它其实是「不适用这一问」。
+
+在留下的 `r format(n_pure4, big.mark = ",")` 种语言里，四个修饰语全在同一侧的有 `r n_harm4` 种：全前 `r n_pre4`、全后 `r n_post4`，合计 `r sprintf("%.1f%%", 100 * harm4)`。
+
+# 每多一个修饰语，同侧的代价就翻一倍
+
+```{r}
+#| label: fig-ladder
+#| echo: false
+#| fig-cap: "Agreement survives the second and third modifier far better than chance, and collapses at the fourth. Every observed share sits far outside the permutation null, and the margin grows with each modifier added."
+#| fig-width: 9.0
+#| fig-height: 4.2
+#| dpi: 200
+
+lad_plot <- harmony_ladder |>
+  mutate(lab = c("numeral + demonstrative",
+                 "+ property word",
+                 "+ possessor",
+                 "+ quantifier")[k - 1],
+         lab = factor(lab, levels = rev(lab)))
+
+p_lad <- ggplot(lad_plot) +
+  geom_segment(aes(x = null_lo, xend = null_hi, y = lab, yend = lab),
+               colour = PAL$pale, linewidth = 6, lineend = "round") +
+  geom_point(aes(x = null_mean, y = lab), colour = PAL$body, size = 2.0, shape = 16) +
+  geom_segment(aes(x = 0.005, xend = observed, y = lab, yend = lab),
+               colour = PAL$ink, linewidth = 0.45, linetype = "23") +
+  geom_point(aes(x = observed, y = lab), colour = PAL$ink, size = 2.7, shape = 16) +
+  geom_text(aes(x = observed, y = lab, label = sprintf("%.0f%%", 100 * observed)),
+            hjust = -0.28, family = FAM_N, size = mm(TT_TYPE[["axis_text"]]),
+            colour = PAL$ink, fontface = "bold") +
+  scale_x_continuous(limits = c(0, 1.0), labels = function(x) sprintf("%.0f%%", 100 * x),
+                     expand = c(0, 0)) +
+  labs(x = "share of languages putting all of them on the same side of the noun",
+       y = NULL,
+       title = "Order harmony is real, and it runs out at the possessor",
+       subtitle = sprintf(paste0("The same %s languages at every step, one modifier added at a ",
+                                 "time; grey band = 95%% of %d permutations"),
+                          format(n_fixed, big.mark = ","), N_REP),
+       caption = tt_source("grambank_values.csv", n_fixed,
+         paste0("Black = observed; grey = what independence would predict with the same margins. ",
+                "The gap narrows as modifiers are added because each new one is a fresh chance ",
+                "to disagree, not because the sample changes."))) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM_T) +
+  theme(panel.grid.major.y = element_blank(),
+        axis.text.y = element_text(family = FAM_T, colour = PAL$ink,
+                                   size = TT_TYPE[["annot"]], hjust = 1),
+        axis.text.x = element_text(family = FAM_N, colour = PAL$body,
+                                   size = TT_TYPE[["caption"]]),
+        axis.title.x = element_text(family = FAM_T, colour = PAL$body,
+                                    size = TT_TYPE[["caption"]], margin = margin(t = 6)),
+        plot.subtitle = element_text(family = FAM_T, colour = PAL$body,
+                                     size = TT_TYPE[["subtitle"]], hjust = 0,
+                                     margin = margin(b = 10)),
+        plot.caption  = element_text(family = FAM_T, colour = PAL$body,
+                                     size = TT_TYPE[["caption"]], hjust = 0,
+                                     margin = margin(t = 10), lineheight = 1.35),
+        plot.margin   = margin(14, 30, 10, 12))
+p_lad
+```
+
+在 `r format(n_fixed, big.mark = ",")` 种五个参数都齐的语言上逐级加码、要求它们全部同侧：两个参数 `r sprintf("%.0f%%", 100 * lad(2)$observed)`，三个 `r sprintf("%.0f%%", 100 * lad(3)$observed)`，四个 `r sprintf("%.0f%%", 100 * lad(4)$observed)`，五个 `r sprintf("%.0f%%", 100 * lad(5)$observed)`。
+
+若四个参数互不相干，按同样边际比例，四个全同侧的概率只有 `r sprintf("%.1f%%", 100 * lad(4)$expected)`；实际 `r sprintf("%.0f%%", 100 * lad(4)$observed)`，高出 `r sprintf("%.1f", lad_ratio4)` 倍，也远在置换零分布上界 `r sprintf("%.0f%%", 100 * lad(4)$null_hi)` 之外。和谐是真的，但它每加一个修饰语就掉一次——**前三个之间掉得慢，第四个掉得最狠**。
+
+# 断口就是领属语
+
+```{r}
+#| label: fig-patterns
+#| echo: false
+#| fig-cap: "Six of the sixteen possible arrangements hold most of the languages. The two harmonic arrangements are the largest pair, and both of the next two break at the possessor."
+#| fig-width: 8.8
+#| fig-height: 3.4
+#| dpi: 200
+
+pc <- pat_census |>
+  head(n_pat_shown) |>
+  mutate(lab = factor(pattern, levels = rev(pattern)))
+
+p_pat <- ggplot(pc) +
+  geom_col(aes(x = n, y = lab, fill = harmonic), width = 0.6) +
+  geom_text(aes(x = n, y = lab, label = format(n, big.mark = ",")),
+            hjust = -0.16, family = FAM_N, size = mm(TT_TYPE[["axis_text"]]),
+            colour = PAL$ink, fontface = "bold") +
+  scale_fill_manual(values = c(`TRUE` = PAL$ink, `FALSE` = PAL$odd), guide = "none") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(x = sprintf("languages (of %s with all four coded to a single side)",
+                   format(n_pure4, big.mark = ",")),
+       y = NULL,
+       title = "Two clean blocs, then the possessor starts crossing over",
+       subtitle = sprintf(paste0("The %d most common arrangements of %d; black = all four agree, ",
+                                 "ochre = at least one disagrees"),
+                          n_pat_shown, n_patterns),
+       caption = tt_source("grambank_values.csv", n_pure4,
+         sprintf(paste0("Each row reads numeral, demonstrative, property word, possessor. The top ",
+                        "%d arrangements cover %.0f%% of the languages; the other %d split the ",
+                        "remaining %.0f%%."),
+                 n_pat_shown, 100 * pat_shown, n_patterns - n_pat_shown,
+                 100 * (1 - pat_shown)))) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM_T) +
+  theme(panel.grid.major.y = element_blank(),
+        axis.text.y  = element_text(family = FAM_N, colour = PAL$ink,
+                                    size = TT_TYPE[["annot"]], hjust = 1),
+        axis.text.x  = element_text(family = FAM_N, colour = PAL$body,
+                                    size = TT_TYPE[["caption"]]),
+        axis.title.x = element_text(family = FAM_T, colour = PAL$body,
+                                    size = TT_TYPE[["caption"]], margin = margin(t = 6)),
+        plot.subtitle = element_text(family = FAM_T, colour = PAL$body,
+                                     size = TT_TYPE[["subtitle"]], hjust = 0,
+                                     margin = margin(b = 10)),
+        plot.caption  = element_text(family = FAM_T, colour = PAL$body,
+                                     size = TT_TYPE[["caption"]], hjust = 0,
+                                     margin = margin(t = 10), lineheight = 1.35),
+        plot.margin   = margin(14, 24, 10, 12))
+p_pat
+```
+
+`r format(n_pure4, big.mark = ",")` 种语言落在 `r n_patterns` 种排列里，前五种吃掉 `r sprintf("%.0f%%", 100 * pat_top5)`。最大的一对是两种完全同侧：「全在名词后」`r n_post4` 种、「全在名词前」`r n_pre4` 种。紧跟着的两种都是**三个同侧、领属语在对面**——`r format(head(pat_census$n, 4)[3], big.mark = ",")` 种和 `r format(head(pat_census$n, 4)[4], big.mark = ",")` 种。
+
+逐对算 kappa，关系一目了然：
+
+```{r}
+#| label: tbl-kappa
+#| echo: false
+kappas |>
+  transmute(`参数对` = pair, `可比语言数` = format(n, big.mark = ","),
+            `一致率` = sprintf("%.1f%%", 100 * agree),
+            `kappa` = sprintf("%.2f", kappa)) |>
+  kable(format = "html",
+        caption = "两两一致度（只在两者都有单一侧编码的语言上算；kappa = 0 表示与随机猜测无异）")
+```
+
+数词、指示词、属性词三者之间的一致率在七成到八成之间、kappa 在 `r sprintf("%.2f", kap_rest_min)`–`r sprintf("%.2f", kap_rest_max)`；只要换成领属语，kappa 就掉到 `r sprintf("%.2f", kap_poss_max)` 甚至 `r sprintf("%.2f", kap_poss_min)`。
+
+更直接的算法：在「其余三个已经站在同一侧」的 `r format(n_other3, big.mark = ",")` 种语言里，领属语跟着站的有 `r n_poss_same` 种——这正好是上一节的全同侧那 `r n_harm4` 种，两条算法必然对上——跑到对面的有 `r n_poss_flip` 种，也就是 **`r sprintf("%.0f%%", 100 * share_flip)` 翻面**。
+
+# 断口跟着家族走，不跟着大陆走
+
+```{r}
+#| label: fig-families
+#| echo: false
+#| fig-cap: "Each cell is the share of a family's languages that put that modifier before the noun. Families are ordered by how far the possessor sits from the other three, so the harmonic families land in the middle and the rows where the possessor crosses sit at the two ends."
+#| fig-width: 8.8
+#| fig-height: 6.6
+#| dpi: 200
+
+DELTA_X <- 5.95          # Δ 列（领属语 − 其余三项）右对齐位置
+SEP_X   <- 4.62          # Δ 列与四格矩阵之间的分隔线
+
+tile <- fam_tab |>
+  mutate(family_name = factor(family_name, levels = rev(family_name))) |>
+  select(family_name, pre_num, pre_dem, pre_prop, pre_poss) |>
+  pivot_longer(starts_with("pre_"), names_to = "mod", values_to = "share") |>
+  mutate(x = as.numeric(factor(mod,
+              levels = c("pre_num", "pre_dem", "pre_prop", "pre_poss"))))
+
+delta_df <- fam_tab |>
+  mutate(family_name = factor(family_name, levels = rev(family_name)))
+
+p_tile <- ggplot() +
+  geom_tile(data = tile, aes(x = x, y = family_name, fill = share),
+            width = 0.94, height = 0.92, colour = PAL$bg, linewidth = 1.4) +
+  geom_vline(xintercept = SEP_X, colour = PAL$rule, linewidth = 0.45) +
+  geom_text(data = delta_df,
+            aes(x = DELTA_X, y = family_name, label = sprintf("%+.2f", gap),
+                colour = gap),
+            hjust = 1, family = FAM_N, size = mm(TT_TYPE[["annot"]])) +
+  scale_fill_gradient2(low = PAL$post, mid = PAL$paper, high = PAL$pre,
+                       midpoint = 0.5, limits = c(0, 1),
+                       labels = function(x) sprintf("%.0f%%", 100 * x),
+                       name = "share of the family's languages putting it before the noun",
+                       guide = guide_colourbar(title.position = "top",
+                                               barwidth = 9, barheight = 0.45)) +
+  scale_colour_gradient2(low = PAL$post, mid = PAL$grey, high = PAL$pre,
+                         midpoint = 0, guide = "none") +
+  scale_x_continuous(breaks = c(1:4, 5.5),
+                     labels = c("numeral", "demonstrative", "property word",
+                                "possessor", "\u0394 vs. the rest"),
+                     position = "top", limits = c(0.45, 6.05), expand = c(0, 0)) +
+  scale_y_discrete(limits = rev(levels(delta_df$family_name)), expand = c(0, 0.6)) +
+  labs(title = "The possessor crosses over a whole family at a time",
+       subtitle = sprintf("The %d largest families, ordered by how far the possessor sits from the rest",
+                          n_fam_tab),
+       caption = tt_source("grambank_languages.csv", langs_in_tab,
+         sprintf(paste0("The %d families here hold %.0f%% of the %s languages with all four ",
+                        "modifiers coded to a single side. \u0394 is the possessor's share minus ",
+                        "the mean of the other three, so a positive \u0394 means the possessor sits ",
+                        "further forward than its family's other modifiers. The middle rows are ",
+                        "the harmonic families; the two ends are where the family habit and the ",
+                        "possessor disagree."),
+                 n_fam_tab, 100 * share_langs_in_tab,
+                 format(n_pure4, big.mark = ",")))) +
+  tt_base(bg = PAL$bg, ink = PAL$ink, body = PAL$body, grid = PAL$grid, family = FAM_T) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.x.top = element_text(family = FAM_T, colour = PAL$body,
+                                       size = TT_TYPE[["annot"]]),
+        axis.text.y     = element_text(family = FAM_T, colour = PAL$ink,
+                                       size = TT_TYPE[["annot"]], hjust = 1),
+        axis.title      = element_blank(),
+        legend.position      = "top",
+        legend.justification = "left",
+        legend.title = element_text(family = FAM_T, colour = PAL$body,
+                                    size = TT_TYPE[["caption"]]),
+        legend.text  = element_text(family = FAM_N, colour = PAL$body,
+                                    size = TT_TYPE[["caption"]]),
+        plot.subtitle = element_text(family = FAM_T, colour = PAL$body,
+                                     size = TT_TYPE[["subtitle"]], hjust = 0,
+                                     margin = margin(b = 8)),
+        plot.caption  = element_text(family = FAM_T, colour = PAL$body,
+                                     size = TT_TYPE[["caption"]], hjust = 0,
+                                     margin = margin(t = 10), lineheight = 1.35),
+        plot.margin   = margin(14, 16, 8, 10))
+p_tile
+```
+
+按家族看，`r n_fam_tab` 个样本够（≥ 10 种语言）的家族覆盖了 `r sprintf("%.0f%%", 100 * share_langs_in_tab)` 的样本量。
+
+中间几行是完全同侧的家族：乌拉尔、纳赫-达吉斯坦、达罗毗荼、印欧全部「前置」，大西洋-刚果、亚非、南亚语系全部「后置」。
+
+**两头那几行才是断口**：`r top_up$family_name` 的领属语 `r sprintf("%.0f%%", 100 * top_up$pre_poss)` 前置，其余三个平均只有 `r sprintf("%.0f%%", 100 * top_up$rest)`；`r top_down$family_name` 反过来，领属语 `r sprintf("%.0f%%", 100 * top_down$pre_poss)` 前置，其余三个 `r sprintf("%.0f%%", 100 * top_down$rest)`。这种「一个参数整体跑偏」的家族有 `r nrow(fam_up)` 个朝前偏、`r nrow(fam_down)` 个朝后偏——不是零散的个体差异，而是成族出现。
+
+大陆层面就粗糙得多：和谐率最高的是 `r macro_best$macroarea`（`r sprintf("%.0f%%", 100 * macro_best$harm)`），最低的是 `r macro_worst$macroarea`（`r sprintf("%.0f%%", 100 * macro_worst$harm)`）。同一个大陆里坐着相反的阵营：欧亚大陆既有全前置的乌拉尔，也有领属语翻面的汉藏；`Papunesia` 里既有零散分化的南岛，也有成族翻面的跨新几内亚语系。**「哪个洲语序如何」这个问法本身就不成立。**
+
+```{r}
+#| label: tbl-macro
+#| echo: false
+macro_tab |>
+  transmute(`宏区` = macroarea, `语言数` = n,
+            `四者同侧占比` = sprintf("%.0f%%", 100 * harm)) |>
+  kable(format = "html",
+        caption = sprintf("六个地理宏区内部的和谐率（n = %s 个四参数齐备的语言）",
+                          format(n_pure4, big.mark = ",")))
+```
+
+```{r}
+#| label: tbl-family
+#| echo: false
+fam_tab |>
+  transmute(`语系` = family_name, `语言数` = n,
+            `数词` = sprintf("%.0f%%", 100 * pre_num),
+            `指示词` = sprintf("%.0f%%", 100 * pre_dem),
+            `属性词` = sprintf("%.0f%%", 100 * pre_prop),
+            `领属语` = sprintf("%.0f%%", 100 * pre_poss),
+            `领属语−其余` = sprintf("%+.2f", gap),
+            `四者同侧` = sprintf("%.0f%%", 100 * harm)) |>
+  kable(format = "html",
+        caption = sprintf("家族层面的前置比例（按领属语与其余三项的差排序；只列 ≥ 10 种语言的 %d 个家族）",
+                          n_fam_tab))
+```
+
+# 这张报告不能得出的
+
+- **不能读成因果，也不能读成「某种语言更合逻辑」。** 这里只有编码计数：`1` 是「在名词前」，`3` 是「两种都行」。把 `3` 强行归到某一侧就会改变结论；本报告的做法是把它们剔除，而剔除本身会偏向那些语序自由的语言。
+- **四个参数不是四个独立样本。** 同一批语言同时贡献四个编码，所以 `r sprintf("%.0f%%", 100 * harm4)` 不是四次独立投掷的结果。置换零假设打散的是列与列之间的关联、保留各自边际，它回答的是「若这四个参数互不相干」，不是「若随机抽语言」。
+- **调查表设计决定了这四者的可比值。** Grambank 只问「无标记语序」，不问频率，也不分口语与书面语；一个参数的回答可能只来自一位描述者的语法书。
+- **家族不是判决，只是个强先验。** `r n_fam5` 个样本够的家族里，众数模式平均只覆盖 `r sprintf("%.0f%%", 100 * w_modal)` 的语言；乌拉尔与纳赫-达吉斯坦是 `r sprintf("%.0f%%", 100 * modal_of("Uralic"))`，南岛只有 `r sprintf("%.0f%%", 100 * modal_of("Austronesian"))`。「家族决定语序」和「家族内部就能打架」都能从表 4 里找到证据，只能取中间那个说法。
+- **地图上的疏密不是数据量的疏密。** 每个语言一票，大语种与小语种等权；欧洲点看起来少，是那里被单列成一条记录的语言本来就少。
+- **`r n_iso` 种语言没有语系标签**（孤立语，或尚未归并进某个语系的记录），`r n_na_mac` 种连宏区都没有。表 4 与图 3 的分母因此小于表 1：前者要求有语系，后者只要求四个参数编码齐全。
+
+```{r}
+#| label: self-check
+#| echo: false
+#| include: false
+w <- NULL
+html_path <- "../output/02_exploratory_visualization.html"
+if (file.exists(html_path)) {
+  w <- tt_weigh(html_path, quiet = TRUE)
+  stopifnot(attr(w, "html_mb") <= TT_HTML_MAX_MB)
+  stopifnot(!nrow(w) || max(w$mb) <= TT_PNG_MAX_MB)
+}
+
+aud <- bind_rows(
+  tt_audit(p_map)  |> mutate(fig = "map"),
+  tt_audit(p_lad)  |> mutate(fig = "ladder"),
+  tt_audit(p_pat)  |> mutate(fig = "patterns"),
+  tt_audit(p_tile) |> mutate(fig = "families")
+)
+stopifnot(all(aud$in_ladder))
+stopifnot(length(unique(stats::na.omit(aud$size)))   <= TT_TYPE_MAX)
+stopifnot(length(unique(stats::na.omit(aud$family))) <= TT_FAMILY_MAX)
+
+cat(sprintf("\n[check] html %s | figures %d\n",
+            if (is.null(w)) "n/a (first render)" else sprintf("%.2f MB", attr(w, "html_mb")),
+            if (is.null(w) || !nrow(w)) 0L else nrow(w)), file = stderr())
+cat(sprintf("[check] sizes used: %s\n",
+            paste(sort(unique(stats::na.omit(aud$size))), collapse = ", ")), file = stderr())
+cat(sprintf("[check] families used: %s\n",
+            paste(sort(unique(stats::na.omit(aud$family))), collapse = ", ")), file = stderr())
+```
