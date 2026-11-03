@@ -259,23 +259,26 @@ body {
 .hub-stage { position: absolute; inset: 0; }
 
 /* ---------- 钉住的左侧栏（宽屏默认展开） ----------
-   宽屏下不把周列表做成「浮层 + 遮罩」，而是钉在顶栏下方当常驻侧栏：
-   内容区整体右移，遮罩不出现，报告不会被压暗，也不抢焦点。
+   宽屏下不把周列表做成「浮层 + 遮罩」，而是钉在顶栏下方当常驻侧栏；
+   但它**悬浮在内容之上**：内容区保持全宽，不因侧栏而变窄。
+   侧栏底色 80% 不透明 + 背景模糊，隐约透出下面的报告又不碍读。
    窄屏（见文末 media query）退化成原来的浮层抽屉：覆盖内容、带遮罩。
    两种形态共用同一个 <nav>，靠 body 上的 data-nav 切换，避免两套 DOM 漂移。 */
-body[data-nav="docked"] .hub-main { inset: var(--hub-header-h) 0 0 var(--hub-nav-w); }
 body[data-nav="docked"] .hub-drawer {
   top: var(--hub-header-h);
   width: var(--hub-nav-w);
   transform: none;
   visibility: visible;
-  box-shadow: none;
   transition: none;              /* 钉住态不需要滑入动画 */
+  background: rgba(255, 255, 255, .8);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--hub-shadow);
 }
 body[data-nav="docked"] .hub-drawer .hub-close { display: none; }
 body[data-nav="docked"] .hub-scrim { display: none; }
 
-/* 钉住态里内容区右移，报告 iframe 的宽度随之变化，需要重算 */
+/* 钉住态悬浮在内容之上，内容区不再右移，iframe 宽度不随侧栏变化 */
 @media (prefers-reduced-motion: reduce) {
   body[data-nav="docked"] .hub-main { transition: none; }
 }
@@ -818,7 +821,8 @@ body[data-nav="docked"] .hub-scrim { display: none; }
   /* ---------------- 抽屉开关 ---------------- */
 
   /* 两种形态共用同一个 <nav>：
-       docked（宽屏默认）—— 钉在顶栏下方的常驻左栏，内容区右移，无遮罩、不抢焦点
+       docked（宽屏默认）—— 钉在顶栏下方的常驻左栏，半透明悬浮在内容之上，
+                            内容区保持全宽，无遮罩、不抢焦点
        overlay（窄屏 / 手动唤出）—— 原来的浮层抽屉：覆盖内容 + 遮罩 + 焦点陷阱
      形态记在 <body data-nav>，CSS 按它切换布局；JS 只负责状态与焦点语义。 */
   var NAV_MIN = 900;                 /* 与 hub.css 的 899px 断点对齐 */
@@ -1041,7 +1045,7 @@ body[data-nav="docked"] .hub-scrim { display: none; }
 
   /* ---------------- 初始形态 ---------------- */
 
-  /* 进入页面时的默认：宽屏把周列表钉成左侧栏（内容区右移），窄屏保持收起，
+  /* 进入页面时的默认：宽屏把周列表钉成半透明悬浮左侧栏（内容区保持全宽），窄屏保持收起，
    需要时才点按钮 / 按 M 唤出浮层。
    用户若手动收起过，本次会话内记住这个选择（sessionStorage，跨刷新生效但
    不跨标签页共享；隐私模式下 setItem 可能抛错，一律吞掉）。
@@ -1067,7 +1071,7 @@ body[data-nav="docked"] .hub-scrim { display: none; }
 
   applyInitialNav();
 
-  /* 跨断点时重新决定形态：从宽到窄必须收起（否则侧栏会挤掉半个报告），
+  /* 跨断点时重新决定形态：从宽到窄必须收起（窄屏下侧栏改走浮层抽屉），
      从窄到宽恢复「默认展开」但尊重本会话内的手动收起。 */
   var resizeTimer = null;
   window.addEventListener("resize", function () {

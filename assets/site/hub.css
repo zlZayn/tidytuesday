@@ -235,23 +235,26 @@ body {
 .hub-stage { position: absolute; inset: 0; }
 
 /* ---------- 钉住的左侧栏（宽屏默认展开） ----------
-   宽屏下不把周列表做成「浮层 + 遮罩」，而是钉在顶栏下方当常驻侧栏：
-   内容区整体右移，遮罩不出现，报告不会被压暗，也不抢焦点。
+   宽屏下不把周列表做成「浮层 + 遮罩」，而是钉在顶栏下方当常驻侧栏；
+   但它**悬浮在内容之上**：内容区保持全宽，不因侧栏而变窄。
+   侧栏底色 80% 不透明 + 背景模糊，隐约透出下面的报告又不碍读。
    窄屏（见文末 media query）退化成原来的浮层抽屉：覆盖内容、带遮罩。
    两种形态共用同一个 <nav>，靠 body 上的 data-nav 切换，避免两套 DOM 漂移。 */
-body[data-nav="docked"] .hub-main { inset: var(--hub-header-h) 0 0 var(--hub-nav-w); }
 body[data-nav="docked"] .hub-drawer {
   top: var(--hub-header-h);
   width: var(--hub-nav-w);
   transform: none;
   visibility: visible;
-  box-shadow: none;
   transition: none;              /* 钉住态不需要滑入动画 */
+  background: rgba(255, 255, 255, .8);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--hub-shadow);
 }
 body[data-nav="docked"] .hub-drawer .hub-close { display: none; }
 body[data-nav="docked"] .hub-scrim { display: none; }
 
-/* 钉住态里内容区右移，报告 iframe 的宽度随之变化，需要重算 */
+/* 钉住态悬浮在内容之上，内容区不再右移，iframe 宽度不随侧栏变化 */
 @media (prefers-reduced-motion: reduce) {
   body[data-nav="docked"] .hub-main { transition: none; }
 }
